@@ -1,5 +1,5 @@
-import { nextMissingStep, p2, POSE_NAMES, tipFor } from '@photobooth/shared';
-import { useBooth } from '../store';
+import { nextMissingStep, p2, POSE_NAMES, sessionTip, SNAP_WORDS } from '@photobooth/shared';
+import { currentTemplate, slotRatio, useBooth } from '../store';
 import { Cam, } from '../components/Cam';
 import { Icon } from '../components/basics';
 import { skipSession } from '../flow';
@@ -12,15 +12,16 @@ export function Ready() {
   const next = nextMissingStep(session.photos, session.plan.angles, session.plan.shotsPerAngle);
   const angle = next?.angle ?? 0;
   const pct = total > 1 ? ((total - cd) / (total - 1)) * 100 : 100;
+  const ratio = useBooth(slotRatio);
   return (
     <div className="scr en">
       <div className="top">
-        <div className="chip b">Sudut {p2(angle + 1)} segera dimulai</div>
+        <div className="chip b">Angle {p2(angle + 1)} segera dimulai</div>
         <div className="chip y" data-testid="ready-cd">
           Mulai dalam {cd} detik
         </div>
       </div>
-      <Cam style={{ flex: 1 }}>
+      <Cam style={{ flex: 1 }} ratio={ratio}>
         <div className="stat">
           Cari posisimu dan duduk yang nyaman
           <small>Kamu boleh bergerak bebas. Robot yang menyesuaikan.</small>
@@ -34,11 +35,11 @@ export function Ready() {
 }
 
 /** Pose shown by the floating robot during the session (prototype sesPose()). */
-export function sessionPose(phase: string, angle: number, shot: number, shotsPerAngle: number): string {
+export function sessionPose(phase: string, angle: number, shot: number, shotsPerAngle: number, seed = ''): string {
   if (phase === 'move') return 'cam';
   if (phase === 'nice') return 'cheer';
   if (phase === 'retry') return 'think';
-  return tipFor(angle, Math.max(shot, 1) - 1, shotsPerAngle)[3];
+  return sessionTip(seed, angle, Math.max(shot, 1) - 1, shotsPerAngle)[3];
 }
 
 /** prototype V.session */
@@ -48,10 +49,11 @@ export function Session() {
   const { angles, shotsPerAngle } = session.plan;
   const retake = session.status === 'RETAKE' || session.capture.retakeAngle !== null;
   const a = c.angle;
-  const tip = tipFor(a, Math.max(c.shot, 1) - 1, shotsPerAngle);
+  const tip = sessionTip(session.id, a, Math.max(c.shot, 1) - 1, shotsPerAngle);
+  const snap = SNAP_WORDS[tip[3]] ?? 'Jepret!';
   const m: [string, string] =
     ({
-      move: [`Pindah ke Sudut ${p2(a + 1)}…`, 'Robot sedang mencari angle terbaik.'],
+      move: [`Pindah ke Angle ${p2(a + 1)}…`, 'Robot sedang mencari angle terbaik.'],
       prep: [POSE_NAMES[tip[3]] ?? tip[1], `${tip[1]} · ${tip[2]}`],
       cd: [POSE_NAMES[tip[3]] ?? tip[1], ''],
       shooting: ['Sedang mengambil foto…', 'Tetap diam sebentar ya.'],
@@ -59,11 +61,13 @@ export function Session() {
       retry: [c.message, ''],
     } as Record<string, [string, string]>)[c.phase] ?? ['', ''];
   const totalPhotos = session.photos.length;
+  const ratio = useBooth(slotRatio);
+  const need = useBooth((s) => currentTemplate(s).photoCount);
   return (
     <div className="scr en">
       <div className={`top ${retake ? 'retake-top' : ''}`}>
         <div className={`chip ${retake ? 'retake-chip' : 'b'}`} data-testid="session-angle">
-          {retake ? '♡ COBA LAGI · ' : ''}SUDUT {p2(a + 1)} / {p2(angles)}
+          {retake ? '♡ COBA LAGI · ' : ''}ANGLE {p2(a + 1)} / {p2(angles)}
         </div>
         <div className="dots">
           {[...Array(angles)].map((_, i) => (
@@ -74,19 +78,19 @@ export function Session() {
           FOTO {p2(Math.max(c.shot, 1))} / {p2(shotsPerAngle)}
         </div>
       </div>
-      <Cam style={{ flex: 1, position: 'relative' }}>
+      <Cam style={{ flex: 1, position: 'relative' }} ratio={ratio}>
         <div className={`cd ${c.phase === 'cd' && c.cd ? 'pop' : ''}`} key={`cd${c.cdKey ?? 0}`} id="cd">
-          {c.phase === 'cd' && c.cd ? c.cd === 'cam' ? <Icon n="cam" z={240} c="#fff" /> : c.cd : null}
+          {c.phase === 'cd' && c.cd ? c.cd === 'cam' ? <Icon n="cam" z={240} c="#fff" /> : c.cd === 'snap' ? <span style={{ fontSize: snap.length > 7 ? 160 : 200, whiteSpace: 'nowrap' }}>{snap}</span> : c.cd : null}
         </div>
         <div className={`fl ${c.flashKey ? 'go' : ''}`} key={`fl${c.flashKey ?? 0}`} id="fl" />
         {m[0] ? (
           <div className={`stat tip ${retake ? 'retake-stat' : ''}`} key={`stat-${c.phase}-${c.shot}-${a}`} data-testid="session-stat">
             {retake && c.phase === 'prep' ? 'Satu foto manis lagi ✨' : m[0]}
-            {retake && c.phase === 'move' ? <small>Robot bersiap untuk mengulang sudut ini.</small> : m[1] ? <small>{m[1]}</small> : null}
+            {retake && c.phase === 'move' ? <small>Robot bersiap untuk mengulang angle ini.</small> : m[1] ? <small>{m[1]}</small> : null}
           </div>
         ) : null}
       </Cam>
-      {a < angles - 1 && totalPhotos >= 3 ? (
+      {a < angles - 1 && totalPhotos >= Math.max(3, need) ? (
         <div style={{ position: 'absolute', right: 32, bottom: 32, zIndex: 10 }}>
           <button className="btn" style={{ height: 72, fontSize: 32, background: 'var(--mi)', color: 'var(--ink)', padding: '0 36px' }} onClick={skipSession}>
             SELESAI

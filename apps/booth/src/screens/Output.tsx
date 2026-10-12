@@ -131,12 +131,18 @@ export function Qr() {
   const slots = useFrameSlots();
   const edits = Object.fromEntries(session.slots.map((x) => [x.slotIndex, x.edit]));
   const url = session.gallery?.url ?? '';
+  const preview = session.gallery?.preview;
+  const [previewFailed, setPreviewFailed] = useState(false);
   const printProblem = session.print?.status === 'FAILED' || session.print?.status === 'RETRYING';
   return (
     <div className="scr en">
       <div className="row" style={{ alignItems: 'center', justifyContent: 'center', gap: 96 }}>
         <div className="float" style={{ animationDuration: '8s' }}>
-          <Frame t={t} h={780} mode={4} slots={slots} edits={edits} cycle={flat} label={t.label || label} hiRes />
+          {preview && !previewFailed ? (
+            <img src={preview} alt="Hasil fotomu" draggable={false} onError={() => setPreviewFailed(true)} style={{ height: 780, display: 'block', borderRadius: 24, boxShadow: 'var(--sh)' }} />
+          ) : (
+            <Frame t={t} h={780} mode={4} slots={slots} edits={edits} cycle={flat} label={t.label || label} hiRes />
+          )}
         </div>
         <div style={{ flex: 1, maxWidth: 1000, display: 'flex', flexDirection: 'column', gap: 30 }}>
           <div>
@@ -157,7 +163,7 @@ export function Qr() {
             </div>
           </div>
           <p className="p" style={{ fontSize: 30 }}>
-            {printProblem ? 'Cetakanmu akan dibantu petugas.' : 'Cetakanmu sedang keluar dari mesin.'} Semua momen dari {session.plan.angles} sudut berganti di dalam frame.
+            {printProblem ? 'Cetakanmu akan dibantu petugas.' : 'Cetakanmu sedang keluar dari mesin.'} {preview && !previewFailed ? 'Versi animasinya juga ikut di link QR.' : `Semua momen dari ${session.plan.angles} angle berganti di dalam frame.`}
           </p>
         </div>
       </div>

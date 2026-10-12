@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { PhotoTemplate } from '@photobooth/shared';
-import { currentTemplate, useBooth, useFlatPhotos } from '../store';
+import { computeFrameLayout, type PhotoTemplate } from '@photobooth/shared';
+import { currentTemplate, slotRatio, useBooth, useFlatPhotos } from '../store';
 import { fitGrid } from '../fitGrid';
 import { Frame } from '../components/Frame';
 import { Icon, Pic } from '../components/basics';
@@ -13,9 +13,8 @@ export function Tpl() {
   const flat = useFlatPhotos();
   const label = useBooth((s) => s.config!.branding.label);
   const busy = useBooth((s) => s.busy);
-  // Only frames that can be filled with the session's photos (configurable capture plans).
-  const fit = allTemplates.filter((t) => t.photoCount <= flat.length);
-  const templates = fit.length ? fit : allTemplates;
+  // Chosen before capture, so every enabled frame is offered.
+  const templates = allTemplates;
   // Step 1 groups frames by photo count; step 2 picks a design inside one group.
   const groups = [...new Set(templates.map((t) => t.photoCount))].sort((a, b) => a - b).map((n) => ({ n, items: templates.filter((t) => t.photoCount === n) }));
   const [count, setCount] = useState<number | null>(groups.length === 1 ? groups[0].n : null);
@@ -29,7 +28,9 @@ export function Tpl() {
     if (cur?.photoCount !== g.n) chooseTemplate(g.items[0].id);
     setCount(g.n);
   };
-  const goBack = () => (group && groups.length > 1 ? setCount(null) : back());
+  // Paid already: step 1 has nothing to go back to.
+  const canBack = !!group && groups.length > 1;
+  const goBack = () => canBack && setCount(null);
 
   // Measure the grid box so cards are sized to fit it (never overlap).
   const box = useRef<HTMLDivElement>(null);
@@ -66,7 +67,7 @@ export function Tpl() {
   return (
     <div className="scr en" style={{ paddingTop: 40, paddingBottom: 36 }}>
       <div className="top" style={{ height: 90, marginBottom: 20 }}>
-        <button className={`btn sm ${busy === 'back' ? 'wait' : ''}`} onClick={goBack}>
+        <button className="btn sm" onClick={goBack} style={{ visibility: canBack ? 'visible' : 'hidden' }}>
           <Icon n="back" z={30} /> Kembali
         </button>
         <div style={{ textAlign: 'center' }}>
@@ -155,6 +156,34 @@ export function Pick() {
   const n = t.photoCount;
   const k = picks.length;
   const slots = [...Array(n)].map((_, i) => photos.find((p) => p.id === picks[i]));
+  const ratio = useBooth(slotRatio);
+
+  // Measure grid + frame column so thumbnails and the frame fill the screen.
+  const grid = useRef<HTMLDivElement>(null);
+  const side = useRef<HTMLDivElement>(null);
+  const [gs, setGs] = useState({ w: 0, h: 0 });
+  const [fh, setFh] = useState(0);
+  useLayoutEffect(() => {
+    const g = grid.current;
+    const f = side.current;
+    if (!g || !f) return;
+    const measure = () => {
+      setGs((s) => (s.w === g.clientWidth && s.h === g.clientHeight ? s : { w: g.clientWidth, h: g.clientHeight }));
+      setFh(f.clientHeight);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(g);
+    ro.observe(f);
+    return () => ro.disconnect();
+  }, []);
+  const PG = 16;
+  const fit = fitGrid(flat.length, gs.w, gs.h, ratio, PG, 0, 0, 180);
+  // Few photos: cap at half the grid height so they don't balloon.
+  const thumbH = Math.min(fit.frameH, gs.h / 2 - PG);
+  const frameH = Math.max(0, fh);
+  const frameW = Math.min(computeFrameLayout(t, frameH).width, 620);
+
   return (
     <div className="scr en">
       <div className="top">
@@ -174,20 +203,24 @@ export function Pick() {
               Ketuk {n} foto favoritmu. Urutannya mengikuti posisi di frame.
             </p>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 14, alignContent: 'start', overflow: 'hidden' }}>
-            {flat.map((p) => {
-              const i = picks.indexOf(p.id);
-              return (
-                <div key={p.id} className={`th ${i >= 0 ? 'sel' : ''}`} data-n={i + 1} style={{ aspectRatio: '4/3' }} onClick={() => togglePick(p.id)} data-testid="pick-photo">
-                  <Pic url={p.thumbUrl} />
-                  <i className="tl">Sudut {p.angle + 1}</i>
-                </div>
-              );
-            })}
+          <div
+            ref={grid}
+            style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: `repeat(${fit.cols}, auto)`, gap: PG, justifyContent: 'center', alignContent: fit.scroll ? 'start' : 'center', overflowX: 'hidden', overflowY: fit.scroll ? 'auto' : 'hidden' }}
+          >
+            {gs.w > 0 &&
+              flat.map((p) => {
+                const i = picks.indexOf(p.id);
+                return (
+                  <div key={p.id} className={`th ${i >= 0 ? 'sel' : ''}`} data-n={i + 1} style={{ width: thumbH * ratio, height: thumbH }} onClick={() => togglePick(p.id)} data-testid="pick-photo">
+                    <Pic url={p.thumbUrl} />
+                    <i className="tl">Angle {p.angle + 1}</i>
+                  </div>
+                );
+              })}
           </div>
         </div>
-        <div style={{ width: 520, display: 'flex', justifyContent: 'center' }}>
-          <Frame t={t} h={660} mode={3} slots={slots} label={t.label || label} />
+        <div ref={side} style={{ width: frameW || 520, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
+          {frameH > 0 && <Frame t={t} h={Math.min(frameH, 620 / t.aspectRatio)} mode={3} slots={slots} label={t.label || label} />}
         </div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 22 }}>

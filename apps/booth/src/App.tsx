@@ -127,6 +127,7 @@ export function App() {
   const holdUntil = useBooth((s) => s.holdPrintUntil);
   const capture = useBooth((s) => s.capture);
   const shotsPerAngle = useBooth((s) => s.session?.plan.shotsPerAngle ?? 2);
+  const sessionId = useBooth((s) => s.session?.id ?? '');
   const maintenance = useBooth(
     (s) => !s.session && !s.entering && ((s.health && !s.health.acceptingSessions) || (s.config?.camera.mode === 'browser' && s.cameraState === 'error')),
   );
@@ -147,8 +148,8 @@ export function App() {
 
   // prototype syncRob(): keep the floating mascot in step with the screen / pose
   useEffect(() => {
-    robot.sync(maintenance ? 'welcome' : screen, sessionPose(capture.phase, capture.angle, capture.shot, shotsPerAngle));
-  }, [screen, capture.phase, capture.angle, capture.shot, shotsPerAngle, maintenance]);
+    robot.sync(maintenance ? 'welcome' : screen, sessionPose(capture.phase, capture.angle, capture.shot, shotsPerAngle, sessionId));
+  }, [screen, capture.phase, capture.angle, capture.shot, shotsPerAngle, sessionId, maintenance]);
 
   const View = SCREENS[screen];
   return (

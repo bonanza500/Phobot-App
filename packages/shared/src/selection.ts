@@ -32,6 +32,24 @@ export function autoPick(activeIds: string[], count: number): string[] {
   return out.slice(0, count);
 }
 
+/** Random pick spread over angles: shuffle angles, take one random photo from each, repeat until `count`. */
+export function randomPick<T extends { id: string; angle: number }>(photos: T[], count: number): string[] {
+  const shuffle = <X>(a: X[]) => {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+  const byAngle = new Map<number, string[]>();
+  for (const p of photos) byAngle.set(p.angle, [...(byAngle.get(p.angle) ?? []), p.id]);
+  const piles = shuffle([...byAngle.values()].map((g) => shuffle([...g])));
+  const out: string[] = [];
+  while (out.length < count && piles.some((g) => g.length))
+    for (const g of piles) if (out.length < count && g.length) out.push(g.pop()!);
+  return out;
+}
+
 /** Prototype fpk(): tap toggles; the oldest pick is dropped when the frame is full. */
 export function togglePick(picks: string[], id: string, count: number): { picks: string[]; added: boolean } {
   const i = picks.indexOf(id);

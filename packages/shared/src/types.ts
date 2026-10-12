@@ -52,6 +52,8 @@ export interface PrintDTO {
 export interface GalleryDTO {
   url: string;
   expiresAt: string;
+  /** Animated strip / strip image for the QR screen (falls back to the live frame). */
+  preview?: string;
 }
 
 export interface SessionPlan {

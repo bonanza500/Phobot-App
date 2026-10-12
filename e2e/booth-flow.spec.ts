@@ -28,7 +28,7 @@ test('complete customer journey: Welcome → Pay → Session → Review → Fram
   // Ready → Session (10 angles × 2 photos)
   await screen(page, 'ready');
   await screen(page, 'session');
-  await expect(page.getByTestId('session-angle')).toContainText('SUDUT 01 / 10');
+  await expect(page.getByTestId('session-angle')).toContainText('ANGLE 01 / 10');
   await screen(page, 'review', 120_000);
   await expect(page.locator('.th')).toHaveCount(20);
   await expect(page.getByText('20 foto terpilih')).toBeVisible();
@@ -36,7 +36,7 @@ test('complete customer journey: Welcome → Pay → Session → Review → Fram
   // Retake angle 2 → back to the session → review shows "pilih 2 dari 4"
   await page.getByTestId('retake-1').click();
   await screen(page, 'session');
-  await expect(page.getByTestId('session-angle')).toContainText('ULANG · SUDUT 02');
+  await expect(page.getByTestId('session-angle')).toContainText('ULANG · ANGLE 02');
   await screen(page, 'review', 60_000);
   await expect(page.getByTestId('review-angle-1').getByText('pilih 2 dari 4')).toBeVisible();
   await expect(page.getByText('1 ULANG TERSISA')).toBeVisible();

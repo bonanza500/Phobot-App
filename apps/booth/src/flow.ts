@@ -1,6 +1,6 @@
 import {
   applyEditOp,
-  autoPick as autoPickIds,
+  randomPick,
   CAPTURE_STATES,
   chooseForAngle,
   clampQuantity,
@@ -203,7 +203,7 @@ function onEnterState(prevStatus: SessionState | null, next: SessionSnapshot, pa
       void runSession(next.capture.retakeAngle ?? next.retakenAngles[next.retakenAngles.length - 1] ?? 0);
       break;
     case 'FRAME_SELECTION':
-      if (prevStatus !== 'PHOTO_SELECTION' || recovering) patch.tplId = next.templateId ?? defaultTemplateFor(next);
+      patch.tplId = next.templateId ?? DEFAULT_TEMPLATE_ID;
       break;
     case 'PHOTO_SELECTION':
       if (prevStatus !== 'EDITING' || recovering) patch.picks = [...next.slots].sort((a, b) => a.slotIndex - b.slotIndex).map((x) => x.photoId);
@@ -237,16 +237,6 @@ function onEnterState(prevStatus: SessionState | null, next: SessionSnapshot, pa
   if (recovering && CAPTURE_STATES.has(next.status) && !['READY', 'RETAKE'].includes(next.status)) void sendResilient({ type: 'resume' });
   if (recovering && next.status === 'SESSION_COMPLETE') void sendResilient({ type: 'resume' });
   void s;
-}
-
-/** Prototype default (Strip Klasik) unless the session has too few photos for it. */
-function defaultTemplateFor(sess: SessionSnapshot): string {
-  const list = get().config?.templates ?? [];
-  const n = sess.photos.filter((p) => p.selected).length;
-  const def = list.find((t) => t.id === DEFAULT_TEMPLATE_ID);
-  if (def && def.photoCount <= n) return def.id;
-  const fit = list.filter((t) => t.photoCount <= n).sort((a, b) => b.photoCount - a.photoCount);
-  return fit[0]?.id ?? DEFAULT_TEMPLATE_ID;
 }
 
 /* ------------------------------------------------------------------ commands */
@@ -426,41 +416,40 @@ async function runSession(retakeAngle: number | null) {
  * Flask /detection + Go /api/robot/config + the session photos and mirrors that
  * into the capture screen, then hands over to REVIEW when the sequence ends.
  */
-async function runCapture(t: number, _retakeAngle: number | null) {
-  await sendResilient({ type: 'move', angle: 0 }, 30000);
+async function runCapture(t: number, retakeAngle: number | null) {
+  if (retakeAngle === null) await sendResilient({ type: 'move', angle: 0 }, 30000);
   const started = Date.now();
+  // A retake shoots one pose; cap it well below the full-session limit.
+  const limitMs = retakeAngle === null ? api.captureLimitMs : 120000;
   let seenActive = false;
-  let count = get().session?.photos.length ?? 0;
-  let angle = Math.min(count, plan(get()).angles - 1);
+  const count0 = get().session?.photos.length ?? 0;
+  let count = count0;
+  let angle = retakeAngle ?? Math.min(count, plan(get()).angles - 1);
   let lastCd: number | null = null;
-  setCapture({ angle: Math.min(count, plan(get()).angles - 1), shot: 1, phase: 'move', message: '', cd: null, shotUrl: null });
+  setCapture({ angle, shot: 1, phase: 'move', message: '', cd: null, shotUrl: null });
   /** Local countdown anchored to backend shutter deadline, not poll arrival. */
   let shutterAt: number | null = null;
   let armedKey: number | null = null;
   let firedKey: number | null = null;
-  let captureStartedAt = 0;
+  /** When "Jepret!" showed; non-null until the photo arrives (or gives up). */
+  let snapAt: number | null = null;
   const ticker = setInterval(() => {
     if (shutterAt === null || t !== tok) return;
     const left = shutterAt - Date.now();
-    if (lastCd === 1 && Date.now() - captureStartedAt >= 700) {
+    if (left <= 0) {
+      // Go fires the shutter now: "Jepret!", flash, freeze the live frame.
       firedKey = armedKey;
       shutterAt = null;
       lastCd = null;
-      setCapture({ phase: 'shooting', cd: null });
-      return;
-    }
-    if (left < 0) {
-      // Keep countdown ended only as a fallback if timer polling is late.
-      firedKey = armedKey;
-      shutterAt = null;
-      lastCd = null;
-      setCapture({ phase: 'shooting', cd: null });
+      snapAt = Date.now();
+      setCapture({ phase: 'cd', freeze: true });
+      cd('snap');
+      flash();
       return;
     }
     const digit = left > 2000 ? 3 : left > 1000 ? 2 : 1;
     if (digit !== lastCd) {
       lastCd = digit;
-      if (digit === 1) captureStartedAt = Date.now();
       setCapture({ phase: 'cd' });
       cd(digit);
     }
@@ -468,30 +457,47 @@ async function runCapture(t: number, _retakeAngle: number | null) {
   try {
     for (;;) {
       await wait(250, t);
-      const [det, rc, snap] = await Promise.all([api.robotDetection(), api.robotConfig(), api.refreshPhotos()]);
-      if (t !== tok) throw new Aborted();
-      if (snap) applySnapshot(snap);
+      const [det, rc] = await Promise.all([api.robotDetection(), api.robotConfig()]);
       const seq = det?.sequence;
       if (seq?.total) api.setPlanAngles(seq.total);
       const total = plan(get()).angles;
+      // Robot still holds the pose until shortly after the shot, so its index tags the new photo.
+      const robotAngle = seq?.index ? Math.max(0, Math.min(total - 1, seq.index - 1)) : undefined;
+      const snap = await api.refreshPhotos(robotAngle);
+      if (t !== tok) throw new Aborted();
+      if (snap) applySnapshot(snap);
       const n = get().session?.photos.length ?? 0;
       const fsm = det?.fsm_state;
       if (fsm === 'MOVING' || fsm === 'TRACKING' || fsm === 'CAPTURING' || rc?.auto_capture_active) seenActive = true;
-      angle = Math.max(0, Math.min(total - 1, seq?.index ? seq.index - 1 : n));
+      angle = retakeAngle ?? robotAngle ?? Math.min(total - 1, n);
 
       if (n > count) {
         count = n;
-        flash();
+        if (snapAt === null) flash();
         firedKey = armedKey;
         shutterAt = null;
         lastCd = null;
-        setCapture({ angle, phase: 'nice', cd: null, message: n < total ? 'Bagus banget!' : 'Mantap! Semua sudut selesai.', shotUrl: get().session!.photos.at(-1)!.previewUrl });
-        await wait(1000, t);
+        const last = get().session!.photos.at(-1)!;
+        const msg = retakeAngle !== null ? 'Foto baru tersimpan!' : new Set(get().session!.photos.map((p) => p.angle)).size < total ? 'Bagus banget!' : 'Mantap! Semua angle selesai.';
+        // Frozen frame stays up while the real photo decodes, so the swap has no blank gap.
+        await preload(last.previewUrl, 3000);
+        if (t !== tok) throw new Aborted();
+        snapAt = null;
+        setCapture({ angle, phase: 'nice', cd: null, message: msg, shotUrl: last.previewUrl, freeze: false });
+        await wait(2000, t);
         setCapture({ shotUrl: null });
         continue;
       }
+      // Shot failed or never arrived: unfreeze and fall back to live view.
+      if (snapAt !== null && Date.now() - snapAt > 8000) {
+        snapAt = null;
+        setCapture({ freeze: false, cd: null });
+      }
 
-      const done = (seenActive && (seq?.complete || fsm === 'DONE')) || (!det && n >= total) || Date.now() - started > api.captureLimitMs;
+      const done =
+        (seenActive && (seq?.complete || fsm === 'DONE')) ||
+        (!det && (retakeAngle === null ? n >= total : n > count0)) ||
+        Date.now() - started > limitMs;
       if (done) {
         await sendResilient({ type: 'skip_angles' }, 30000);
         return;
@@ -507,15 +513,26 @@ async function runCapture(t: number, _retakeAngle: number | null) {
         shutterAt = Date.now() + leftMs;
         lastCd = null;
       }
-      if (shutterAt === null) setCapture({ angle, phase: fsm === 'TRACKING' || fsm === 'CAPTURING' || rc?.auto_capture_active ? 'prep' : 'move', cd: null });
+      if (shutterAt === null && snapAt === null) setCapture({ angle, phase: fsm === 'TRACKING' || fsm === 'CAPTURING' || rc?.auto_capture_active ? 'prep' : 'move', cd: null });
     }
   } finally {
     clearInterval(ticker);
+    setCapture({ freeze: false });
   }
 }
 
-function cd(v: number | 'cam') {
-  const c = get().capture as BoothState['capture'] & { cd?: number | 'cam'; cdKey?: number };
+/** Resolves once the image is decoded (or failed / timed out). */
+function preload(url: string, ms: number) {
+  return new Promise<void>((res) => {
+    const img = new Image();
+    img.onload = img.onerror = () => res();
+    setTimeout(res, ms);
+    img.src = url;
+  });
+}
+
+function cd(v: number | 'cam' | 'snap') {
+  const c = get().capture as BoothState['capture'] & { cd?: number | 'cam' | 'snap'; cdKey?: number };
   set({ capture: { ...c, cd: v, cdKey: (c.cdKey ?? 0) + 1 } as BoothState['capture'] });
 }
 function flash() {
@@ -543,7 +560,7 @@ export function tapReviewPhoto(angle: number, id: string) {
 }
 
 export function retake(angle: number) {
-  robot.rbNav(`Ulang sudut ${p2(angle + 1)}`, 'cam', () => void guard('retake', () => send({ type: 'retake', angle })));
+  robot.rbNav(`Ulang angle ${p2(angle + 1)}`, 'cam', () => void guard('retake', () => send({ type: 'retake', angle })));
 }
 
 export function skipSession() {
@@ -556,7 +573,7 @@ export function skipSession() {
 }
 
 export function toFrames() {
-  robot.rbNav('Lanjut pilih frame!', 'point', () => void guard('frames', () => send({ type: 'choose_frame' })));
+  robot.rbNav('Pilih fotonya, yuk!', 'point', () => void guard('frames', () => send({ type: 'choose_frame' })));
 }
 
 export function back() {
@@ -579,7 +596,7 @@ export function chooseTemplate(id: string) {
 }
 
 export function confirmTemplate() {
-  robot.rbNav('Pilih fotonya, yuk!', 'point', () => void guard('frame', () => send({ type: 'frame', templateId: currentTemplate(get()).id })));
+  robot.rbNav('Siap foto!', 'cam', () => void guard('frame', () => send({ type: 'frame', templateId: currentTemplate(get()).id })));
 }
 
 /* ------------------------------------------------------------------ pick (prototype fpk / autoFp) */
@@ -592,12 +609,12 @@ export function togglePick(id: string) {
   const angle = (s.session?.photos.find((x) => x.id === id)?.angle ?? 0) + 1;
   if (!added) robot.react('think', null, 'Batal? Oke', '', 1.2);
   else if (picks.length == n) robot.react('cheer', 'hop', 'Lengkap! Lanjut, yuk', 'star', 1.8);
-  else robot.react('thumbs', 'wob', 'Sudut ' + angle + ', bagus!', '', 1.2);
+  else robot.react('thumbs', 'wob', 'Angle ' + angle + ', bagus!', '', 1.2);
 }
 
 export function autoPick() {
   const s = get();
-  set({ picks: autoPickIds(flatPhotos(s).map((x) => x.id), currentTemplate(s).photoCount) });
+  set({ picks: randomPick(flatPhotos(s), currentTemplate(s).photoCount) });
   robot.react('free', 'dance', 'Dipilihkan!', 'star', 1.6);
 }
 
@@ -681,7 +698,8 @@ export function onIdleTimeout() {
   const st = s.session?.status;
   if (!st) return;
   if (st === 'SELECT_PRINT' || st === 'WAITING_PAYMENT' || st === 'PAYMENT_FAILED') return backFromPay();
-  if (['REVIEW', 'FRAME_SELECTION', 'PHOTO_SELECTION', 'EDITING'].includes(st))
+  if (st === 'FRAME_SELECTION') return confirmTemplate();
+  if (['REVIEW', 'PHOTO_SELECTION', 'EDITING'].includes(st))
     return void guard('auto', async () => {
       await flushEdits();
       await send({ type: 'auto_complete' });

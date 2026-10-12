@@ -17,7 +17,8 @@ function useJpegPollCanvas(url: string | null | undefined, ref: { current: HTMLC
       const img = new Image();
       img.onload = () => {
         const c = ref.current;
-        if (c) {
+        // freeze: keep the "Jepret!" frame on screen until the real photo replaces it.
+        if (c && !useBooth.getState().capture.freeze) {
           if (c.width !== img.naturalWidth || c.height !== img.naturalHeight) Object.assign(c, { width: img.naturalWidth, height: img.naturalHeight });
           c.getContext('2d')?.drawImage(img, 0, 0);
         }
@@ -44,7 +45,50 @@ const delay = (w: number) => `-${((Date.now() / 1000) % w).toFixed(2)}s`;
  * Fit (cover/contain), mirror and rotation come from configuration; the aspect
  * ratio is never distorted.
  */
-export function Cam({ children, style }: { children?: ReactNode; style?: CSSProperties }) {
+export function Cam({ children, style, ratio }: { children?: ReactNode; style?: CSSProperties; ratio?: number }) {
+  const outer = useRef<HTMLDivElement>(null);
+  const [avail, setAvail] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = outer.current;
+    if (!el) return;
+    const measure = () => setAvail((s) => (s.w === el.clientWidth && s.h === el.clientHeight ? s : { w: el.clientWidth, h: el.clientHeight }));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [!ratio]);
+  if (!ratio) return <CamBox style={style}>{children}</CamBox>;
+  // Box (inside the 10px .cam border) matches the saved photo; the frame-slot area is cut out of a dim layer.
+  const B = 20;
+  const cw = Math.max(0, Math.min(avail.w - B, (avail.h - B) * PHOTO_RATIO));
+  const ch = cw / PHOTO_RATIO;
+  return (
+    <div ref={outer} style={{ ...style, minHeight: 0, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {avail.w > 0 && (
+        <CamBox style={{ width: cw + B, height: ch + B, flex: 'none' }} hole={ratio}>
+          {children}
+        </CamBox>
+      )}
+    </div>
+  );
+}
+
+// ponytail: Canon EOS R100 saves 6000×3368 (16:9). Change if the camera's aspect setting changes.
+const PHOTO_RATIO = 16 / 9;
+
+/** Darkens what falls outside the frame slot; the centre crop is what the frame keeps. */
+function SlotMask({ w, h, ratio }: { w: number; h: number; ratio: number }) {
+  if (!w || !h) return null;
+  const hw = Math.min(w, h * ratio);
+  const hh = hw / ratio;
+  return (
+    <div className="slot-mask" aria-hidden>
+      <i className="slot-hole" style={{ left: (w - hw) / 2, top: (h - hh) / 2, width: hw, height: hh }} />
+    </div>
+  );
+}
+
+function CamBox({ children, style, hole }: { children?: ReactNode; style?: CSSProperties; hole?: number }) {
   const cfg = useBooth((s) => s.config?.camera);
   const camState = useBooth((s) => s.cameraState);
   const shotUrl = useBooth((s) => s.capture.shotUrl);
@@ -95,6 +139,7 @@ export function Cam({ children, style }: { children?: ReactNode; style?: CSSProp
         <canvas ref={canvasRef} className={`lv ${fit}`} style={mediaStyle} />
       ) : null}
       {shotUrl ? <img className={`lv ${fit}`} src={shotUrl} alt="" draggable={false} /> : null}
+      {hole ? <SlotMask w={box.w} h={box.h} ratio={hole} /> : null}
       {(mode === 'browser' && !live) || mode === 'mock' || (mode === 'server' && !cfg?.liveViewUrl) ? (
         <>
           <div className="b1" style={{ animationDelay: delays.d20 }} />

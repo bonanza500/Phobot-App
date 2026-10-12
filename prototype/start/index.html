@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Robot Photobooth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --ink:#2B2A4C; --bl:#5B7CFA; --cy:#7FD6F0; --ye:#FFD166; --lv:#DCCBFF; --pk:#FFC7DE; --pe:#FFD9B0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #FAF8F3; }
+  body { font-family: 'Fredoka','Nunito','Trebuchet MS',sans-serif; color: var(--ink); -webkit-tap-highlight-color: transparent; user-select: none; }
+
+  #stage {
+    position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px; overflow: hidden;
+    transform: translate(-50%,-50%) scale(var(--s,1));
+    background: #FAF8F3 radial-gradient(#E6E0D2 1.6px,transparent 1.7px) 0 0/44px 44px;
+  }
+  .screen { position: absolute; inset: 0; transition: opacity .5s ease; }
+
+  /* left column */
+  .left { position: absolute; left: 150px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; z-index: 2; }
+  .chip { display: inline-flex; align-items: center; height: 72px; padding: 0 36px; border-radius: 999px; background: var(--lv); color: #4A3FA0; font-size: 34px; font-weight: 500; margin-bottom: 40px; white-space: nowrap; }
+  h1 { margin: 0; font-size: 112px; font-weight: 700; letter-spacing: -3px; line-height: .95; white-space: nowrap; }
+  .cta { margin-top: 56px; display: flex; align-items: center; gap: 20px; }
+  .cta p { margin: 0; font-size: 50px; font-weight: 400; line-height: 1.15; white-space: nowrap; }
+  .arrows { display: flex; }
+  .arrow { width: 84px; height: 84px; margin-left: -34px; color: var(--bl); opacity: .5; animation: nudge 1.8s ease-in-out infinite; }
+  .arrow:first-child { margin-left: 0; }
+  .arrow:nth-child(2) { animation-delay: .2s; }
+  .arrow:nth-child(3) { animation-delay: .4s; }
+  @keyframes nudge { 0%,100% { transform: translateX(0); opacity: .5; } 50% { transform: translateX(18px); opacity: 1; } }
+
+  /* right */
+  .lens { position: absolute; right: -140px; top: 40px; width: 1000px; height: 1000px; }
+  #bot { position: absolute; left: 1250px; top: 225px; width: 620px; height: 650px; cursor: pointer; outline: none; z-index: 1; }
+  #bot:focus-visible .press { filter: drop-shadow(0 0 0 var(--bl)) drop-shadow(0 0 10px rgba(91,124,250,.55)); }
+  .bob { position: absolute; inset: 0; animation: bob 3s ease-in-out infinite; }
+  @keyframes bob { 0%,100% { transform: translateY(-10px); } 50% { transform: translateY(10px); } }
+  .press { position: absolute; inset: 0; transition: transform .15s ease; }
+  #bot:not(.go):active .press { transform: scale(.94); }
+  .ninja { position: absolute; inset: 0; transform-origin: 50% 50%; }
+  .ninja svg { display: block; width: 620px; height: auto; }
+  .wave { transform-box: view-box; transform-origin: 146px 165px; animation: wave .7s ease-in-out infinite alternate; }
+  @keyframes wave { from { transform: rotate(0deg); } to { transform: rotate(-24deg); } }
+
+  .ring { position: absolute; left: 50%; top: 50%; width: 440px; height: 440px; margin: -220px 0 0 -220px; border: 8px solid var(--bl); border-radius: 50%; pointer-events: none; opacity: 0; animation: ring 2.8s ease-out infinite; }
+  .ring:nth-child(2) { animation-delay: .93s; }
+  .ring:nth-child(3) { animation-delay: 1.86s; }
+  @keyframes ring { from { transform: scale(.6); opacity: .55; } to { transform: scale(1.55); opacity: 0; } }
+
+  .bubble { position: absolute; top: -60px; left: 50%; transform: translateX(-50%); z-index: 3; pointer-events: none; }
+  .bubble-in { position: relative; background: #fff; border-radius: 999px; padding: 16px 42px; font-size: 46px; font-weight: 700; white-space: nowrap; box-shadow: 0 6px 18px rgba(43,42,76,.10); animation: float 2s ease-in-out infinite; }
+  .bubble-in::after { content: ''; position: absolute; left: 50%; bottom: -12px; width: 28px; height: 28px; margin-left: -14px; background: #fff; border-radius: 0 0 7px 0; transform: rotate(45deg); }
+  @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-12px); } }
+
+  #bot.go .ring, #bot.go .bubble { opacity: 0; transition: opacity .2s ease; animation: none; }
+  #bot.go .ninja { animation: ninja .8s ease-in .25s forwards; }
+  @keyframes ninja {
+    40%  { transform: rotate(220deg) scale(.7); }
+    100% { transform: rotate(560deg) scale(.04); opacity: 0; filter: blur(6px); }
+  }
+
+  .puff { position: absolute; border-radius: 50%; pointer-events: none; z-index: 4; opacity: 0;
+    background: radial-gradient(circle at 40% 40%, #fff 0, #F3EEFF 42%, #DCCBFF 68%, rgba(220,203,255,0) 72%);
+    animation: puff 1.2s ease-out both; }
+  @keyframes puff {
+    from { transform: translate(-50%,-50%) scale(.2); opacity: 0; }
+    35%  { opacity: .95; }
+    to   { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1.5); opacity: 0; }
+  }
+
+  #page2 { display: flex; align-items: center; justify-content: center; font-size: 96px; font-weight: 700; letter-spacing: -2px; opacity: 0; visibility: hidden; }
+  #stage.next #page1 { opacity: 0; visibility: hidden; transition: opacity .5s ease, visibility 0s .5s; }
+  #stage.next #page2 { opacity: 1; visibility: visible; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .arrow, .bob, .wave, .ring, .bubble-in { animation: none !important; }
+    .arrow { opacity: 1; }
+    .ring { display: none; }
+    #bot.go .ninja { animation: fade .3s ease forwards; }
+    @keyframes fade { to { opacity: 0; } }
+    .screen { transition-duration: .2s; }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <section id="page1" class="screen">
+    <div class="left">
+      <div class="chip">Studio foto otomatis · 10 sudut</div>
+      <h1>ROBOT<br>PHOTOBOOTH</h1>
+      <div class="cta">
+        <p>Sentuh robot<br>untuk mulai foto</p>
+        <div class="arrows" aria-hidden="true">
+          <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+          <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+          <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <svg class="lens" viewBox="0 0 100 100" aria-hidden="true">
+      <circle cx="50" cy="50" r="48" fill="#DCCBFF"/>
+      <circle cx="50" cy="50" r="34" fill="#FFC7DE"/>
+      <circle cx="50" cy="50" r="20" fill="#FFD9B0"/>
+    </svg>
+
+    <div id="bot" role="button" tabindex="0" aria-label="Sentuh robot untuk mulai">
+      <div class="rings"><i class="ring"></i><i class="ring"></i><i class="ring"></i></div>
+      <div class="bob"><div class="press"><div class="ninja">
+        <svg viewBox="0 0 230 240" aria-hidden="true">
+          <ellipse cx="110" cy="230" rx="64" ry="8" fill="#2B2A4C" opacity=".08"/>
+          <path d="M110 50V26" stroke="#7FD6F0" stroke-width="6" stroke-linecap="round"/>
+          <circle cx="110" cy="18" r="10" fill="#FFD166"/>
+          <path d="M74 165L40 188" stroke="#7FD6F0" stroke-width="14" stroke-linecap="round"/>
+          <path class="wave" d="M146 165L186 118" stroke="#7FD6F0" stroke-width="14" stroke-linecap="round"/>
+          <rect x="72" y="148" width="76" height="62" rx="28" fill="#fff" stroke="#BFEAF7" stroke-width="5"/>
+          <circle cx="110" cy="178" r="13" fill="#7FD6F0"/>
+          <circle cx="110" cy="178" r="5" fill="#fff"/>
+          <circle cx="74" cy="165" r="11" fill="#7FD6F0"/>
+          <circle cx="146" cy="165" r="11" fill="#7FD6F0"/>
+          <rect x="50" y="46" width="120" height="94" rx="38" fill="#fff" stroke="#BFEAF7" stroke-width="5"/>
+          <rect x="64" y="62" width="92" height="62" rx="28" fill="#2B2A4C"/>
+          <circle cx="88" cy="94" r="9" fill="#5EE0FF"/>
+          <circle cx="132" cy="94" r="9" fill="#5EE0FF"/>
+          <path d="M98 111q12 10 24 0" fill="none" stroke="#5EE0FF" stroke-width="5" stroke-linecap="round"/>
+          <circle cx="72" cy="112" r="6" fill="#FF9EC4" opacity=".8"/>
+          <circle cx="148" cy="112" r="6" fill="#FF9EC4" opacity=".8"/>
+        </svg>
+      </div></div></div>
+      <div class="bubble"><div class="bubble-in">Sentuh aku!</div></div>
+    </div>
+  </section>
+
+  <section id="page2" class="screen" aria-live="polite">Halaman 2</section>
+</div>
+
+<script>
+  const stage = document.getElementById('stage');
+  const bot = document.getElementById('bot');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const fit = () => stage.style.setProperty('--s', Math.min(innerWidth / 1920, innerHeight / 1080));
+  addEventListener('resize', fit);
+  fit();
+
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  function puffs(n) {
+    for (let i = 0; i < n; i++) {
+      const p = document.createElement('i');
+      const size = rnd(130, 400);
+      p.className = 'puff';
+      p.style.cssText = `width:${size}px;height:${size}px;left:${rnd(0, 620)}px;top:${rnd(0, 650)}px;` +
+        `--dx:${rnd(-70, 70)}px;--dy:${rnd(-140, -30)}px;animation-delay:${rnd(0, .3)}s`;
+      bot.appendChild(p);
+      setTimeout(() => p.remove(), 1900);
+    }
+  }
+
+  let started = false;
+  function start() {
+    if (started) return;
+    started = true;
+    bot.classList.add('go');
+    bot.setAttribute('aria-disabled', 'true');
+    if (!reduce) {
+      puffs(9);
+      setTimeout(() => puffs(6), 350);
+    }
+    setTimeout(() => stage.classList.add('next'), reduce ? 500 : 1900);
+  }
+
+  bot.addEventListener('click', start);
+  bot.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); start(); }
+  });
+</script>
+</body>
+</html>

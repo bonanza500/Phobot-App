@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import {
   activePhotos,
+  computeFrameLayout,
   DEFAULT_TEMPLATE_ID,
   findTemplate,
   screenForState,
@@ -44,7 +45,7 @@ export interface BoothState {
   picks: string[];
   edits: Record<number, EditParams>;
   slot: number;
-  capture: { angle: number; shot: number; phase: CapturePhase; message: string; cd?: number | 'cam' | null; cdKey?: number; flashKey?: number; shotUrl?: string | null };
+  capture: { angle: number; shot: number; phase: CapturePhase; message: string; cd?: number | 'cam' | 'snap' | null; cdKey?: number; flashKey?: number; shotUrl?: string | null; freeze?: boolean };
   readyCd: number;
   big: string | null;
   busy: string | null;
@@ -100,6 +101,12 @@ export function templates(s: BoothState): PhotoTemplate[] {
 export function currentTemplate(s: BoothState): PhotoTemplate {
   const list = templates(s);
   return findTemplate(list, s.tplId) ?? findTemplate(list, s.session?.templateId) ?? findTemplate(list, DEFAULT_TEMPLATE_ID) ?? list[0];
+}
+
+/** w/h of the chosen frame's photo slot; the capture preview uses it for every preset. */
+export function slotRatio(s: BoothState): number {
+  const r = computeFrameLayout(currentTemplate(s), 1000).slots[0];
+  return r && r.h > 0 ? r.w / r.h : 4 / 3;
 }
 
 /** prototype flat(): the session's active photos ordered by angle/shot */

@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { clampQuantity, priceFor, rp, DEFAULT_PRICING } from '../src/pricing';
 import { DEFAULT_TEMPLATES, findTemplate, templatesSchema } from '../src/templates';
 import { computeFrameLayout, computePageLayout } from '../src/layout';
-import { activePhotos, autoPick, canRetake, capturePlan, chooseForAngle, nextMissingStep, retakesLeft, togglePick } from '../src/selection';
+import { activePhotos, autoPick, randomPick, canRetake, capturePlan, chooseForAngle, nextMissingStep, retakesLeft, togglePick } from '../src/selection';
 import { applyDrag, applyEditOp, applyPinch, applyWheel, cssTransform, defaultEdit, visibleCrop } from '../src/edit';
 import { applyColorMatrix, cssFilterToMatrix, editColorMatrix, isIdentity } from '../src/filters';
-import { tipFor, TIPS } from '../src/poses';
+import { sessionTip, tipFor, TIPS } from '../src/poses';
 import { DEFAULT_SETTINGS, mergeSettings } from '../src/config';
 
 describe('pricing', () => {
@@ -88,6 +88,17 @@ describe('photo selection & retake', () => {
     expect(autoPick(ids, 2)).toEqual(['0_0', '5_0']);
     expect(new Set(autoPick(ids, 8)).size).toBe(8);
     expect(autoPick(['a', 'b'], 4)).toEqual(['a', 'b']);
+  });
+  it('randomPick picks unique photos spread over angles, in random order', () => {
+    const angleOf = (id: string) => id.split('_')[0];
+    const four = randomPick(photos, 4);
+    expect(new Set(four).size).toBe(4);
+    expect(new Set(four.map(angleOf)).size).toBe(4);
+    const twelve = randomPick(photos, 12);
+    expect(new Set(twelve).size).toBe(12);
+    expect(new Set(twelve.map(angleOf)).size).toBe(10);
+    expect(randomPick(photos.slice(0, 3), 6).sort()).toEqual(['0_0', '0_1', '1_0']);
+    expect(new Set([...Array(20)].map(() => randomPick(photos, 4).join())).size).toBeGreaterThan(1);
   });
   it('togglePick drops the oldest pick when the frame is full', () => {
     let r = togglePick([], 'a', 2);
@@ -187,6 +198,12 @@ describe('poses & config', () => {
     expect(tipFor(0, 0, 2)[3]).toBe('wave');
     expect(tipFor(9, 1, 2)).toEqual(TIPS[9][1]);
     expect(tipFor(12, 2, 3)[3]).toBeTruthy();
+  });
+  it('shuffles tips per session: no repeats, stable per seed', () => {
+    const keys = (seed: string) => [...Array(10)].map((_, a) => sessionTip(seed, a, 0, 1)[3]);
+    expect(new Set(keys('abc')).size).toBe(10);
+    expect(keys('abc')).toEqual(keys('abc'));
+    expect(keys('abc')).not.toEqual(keys('xyz'));
   });
   it('merges and validates admin overrides', () => {
     const s = mergeSettings(DEFAULT_SETTINGS, { pricing: { firstPrint: 70000 } });

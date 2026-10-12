@@ -175,7 +175,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   gallery: { expirationHours: 24 },
   payment: { expiryMinutes: 5 },
-  branding: { label: 'ROBOT PHOTOBOOTH', welcomeChip: 'Studio foto otomatis · 10 sudut' },
+  branding: { label: 'ROBOT PHOTOBOOTH', welcomeChip: 'Studio foto otomatis · 10 angle' },
   templates: DEFAULT_TEMPLATES,
   angles: DEFAULT_ANGLES,
   dev: { timingScale: 1 },

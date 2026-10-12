@@ -1,6 +1,7 @@
 import {
   activePhotos,
   autoPick,
+  canRetake,
   CAPTURE_STATES,
   DEFAULT_ANGLES,
   DEFAULT_SETTINGS,
@@ -65,6 +66,44 @@ const env = import.meta.env as Record<string, string | undefined>;
 const host = () => `${location.protocol}//${location.hostname}`;
 export const ROBOT_URL = env.VITE_ROBOT_URL?.trim() || '/dobot';
 const DOWNLOAD_URL = () => env.VITE_DOWNLOAD_PUBLIC_URL?.trim() || `${host()}:3000`;
+
+/**
+ * QR target + QR-screen preview, same rules as glambot GetPhotosScreen:
+ * QR = public Google Drive folder when Drive is on (≤45s wait), else the local
+ * /download-photos page. Preview = live strip GIF → framed strip → slideshow GIF,
+ * preloaded so it shows at once; undefined when nothing loads (screen falls back).
+ */
+async function galleryLinks(goId: string, strip?: string): Promise<{ url: string; preview?: string }> {
+  const base = `/api/photo/session/${goId}`;
+  const poll = async <T>(path: string, done: (v: T) => boolean, ms: number, every: number) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      const v = await go<T>('GET', path).catch(() => null);
+      if ((v && done(v)) || Date.now() + every > end) return v;
+      await sleep(every);
+    }
+  };
+  const drive = poll<{ enabled: boolean; ready: boolean; url: string }>(`${base}/drive`, (d) => !d.enabled || d.ready, 45000, 2000);
+  const preview = (async () => {
+    const live = await poll<{ available: boolean }>(`${base}/gif-live/available`, (a) => a.available, 15000, 1200);
+    const src = live?.available ? `${base}/gif-live?inline=1` : strip || `${base}/gif?inline=1`;
+    // The first hit may 404/500 while the backend still renders the GIF: retry.
+    for (let i = 0; i < 4; i++) {
+      const ok = await new Promise<boolean>((res) => {
+        const img = new Image();
+        img.onload = () => res(true);
+        img.onerror = () => res(false);
+        setTimeout(() => res(false), 20000);
+        img.src = src;
+      });
+      if (ok) return src;
+      await sleep(1500);
+    }
+    return undefined;
+  })();
+  const [d, p] = await Promise.all([drive, preview]);
+  return { url: d?.enabled && d.ready && d.url ? d.url : `${DOWNLOAD_URL()}/download-photos/${goId}`, preview: p };
+}
 
 /* ------------------------------------------------------------------ Go HTTP */
 
@@ -142,8 +181,7 @@ const STORE_KEY = 'pb.glambot';
 const PAID_FAIL = new Set(['failed', 'expired', 'cancel', 'deny']);
 const UNPAID: SessionState[] = ['SELECT_PRINT', 'WAITING_PAYMENT', 'PAYMENT_FAILED'];
 const BACK: Partial<Record<SessionState, SessionState>> = {
-  FRAME_SELECTION: 'REVIEW',
-  PHOTO_SELECTION: 'FRAME_SELECTION',
+  PHOTO_SELECTION: 'REVIEW',
   EDITING: 'PHOTO_SELECTION',
   FINAL_PREVIEW: 'EDITING',
 };
@@ -176,13 +214,15 @@ class Api {
       if (saved?.snap) {
         const st = saved.snap.status;
         // Restart mid-flow: capture re-observes the robot, a half-done render is redone.
-        const status: SessionState = CAPTURE_STATES.has(st) ? 'READY' : st === 'SESSION_COMPLETE' ? 'REVIEW' : ['RENDERING', 'PRINTING'].includes(st) ? 'FINAL_PREVIEW' : st;
+        // A cut-off retake returns to Review (its chance is already spent).
+        const status: SessionState = st === 'RETAKE' || st === 'SESSION_COMPLETE' ? 'REVIEW' : CAPTURE_STATES.has(st) ? 'READY' : ['RENDERING', 'PRINTING'].includes(st) ? 'FINAL_PREVIEW' : st;
         this.snap = { ...saved.snap, status };
         this.sessionId = saved.snap.id;
         this.token = 'local';
         this.goId = saved.goId;
         this.orderId = saved.orderId;
         if (status === 'WAITING_PAYMENT') this.startPoll();
+        if (st === 'RETAKE') void go('POST', '/api/robot/disable').catch(() => undefined);
       }
     } catch {
       /* ignore */
@@ -223,7 +263,7 @@ class Api {
     const { digicamUrl: _a, gphoto2Bin: _b, captureCommand: _c, previewUrl: _d, ...camera } = d.camera;
     return {
       pricing: { ...d.pricing, firstPrint: this.pkg.price + this.pkg.print_unit_price, additionalPrint: this.pkg.print_unit_price },
-      session: { ...d.session, shotsPerAngle: 1, retakeLimit: 0 },
+      session: { ...d.session, shotsPerAngle: 1, retakeLimit: 2 },
       timeouts: d.timeouts,
       // Go returns the Canon live view already mirrored.
       camera: { ...camera, mirrorPreview: false, mode: 'server', liveViewUrl: '/api/robot/liveview' },
@@ -273,7 +313,7 @@ class Api {
       createdAt: now,
       paidAt: null,
       expiresAt: null,
-      plan: { angles: 10, shotsPerAngle: 1, retakeLimit: 0, countdownSeconds: 3, readySeconds: DEFAULT_SETTINGS.session.readySeconds },
+      plan: { angles: 10, shotsPerAngle: 1, retakeLimit: 2, countdownSeconds: 3, readySeconds: DEFAULT_SETTINGS.session.readySeconds },
       payment: null,
       photos: [],
       slots: [],
@@ -410,16 +450,30 @@ class Api {
   setPlanAngles(angles: number) {
     if (this.snap && this.snap.plan.angles !== angles) this.emit({ plan: { ...this.snap.plan, angles } });
   }
-  /** Pull the Go session photos; new ones become selected (angle = capture order). */
-  async refreshPhotos(): Promise<SessionSnapshot | null> {
+  /**
+   * Pull the Go session photos. A new photo goes to `angle` (the pose the robot
+   * is shooting), else the retake angle, else the first angle still empty.
+   * A retake photo becomes the angle's pick; the old one stays, unselected.
+   */
+  async refreshPhotos(angle?: number): Promise<SessionSnapshot | null> {
     if (!this.goId || !this.snap) return this.snap;
     const list = await go<GoPhoto[]>('GET', `/api/photo/session/${this.goId}`, undefined, undefined, 5000).catch(() => null);
-    if (!list || !this.snap || (list.length === this.snap.photos.length && list.every((p, i) => p.id === this.snap!.photos[i]?.id))) return this.snap;
-    const prev = new Map(this.snap.photos.map((p) => [p.id, p]));
-    const photos: PhotoDTO[] = list.map((p, i) => {
+    if (!list || !this.snap) return this.snap;
+    const s = this.snap;
+    const known = new Set(s.photos.map((p) => p.id));
+    const fresh = list.filter((p) => !known.has(p.id));
+    if (!fresh.length) return s;
+    const retakeAngle = s.status === 'RETAKE' ? s.capture.retakeAngle : null;
+    let photos = [...s.photos];
+    for (const p of fresh) {
+      const used = new Set(photos.map((x) => x.angle));
+      const a = retakeAngle ?? (angle !== undefined && !used.has(angle) ? angle : [...Array(s.plan.angles).keys()].find((i) => !used.has(i)) ?? photos.length);
+      const retaken = retakeAngle !== null;
+      if (retaken) photos = photos.map((x) => (x.angle === a ? { ...x, selected: false, superseded: true } : x));
       const url = p.url || `/storage/${p.file_path}`;
-      return prev.get(p.id) ?? { id: p.id, angle: i, shot: 0, selected: true, retaken: false, superseded: false, width: null, height: null, thumbUrl: url, previewUrl: url, createdAt: p.created_at };
-    });
+      const shot = photos.filter((x) => x.angle === a).length;
+      photos.push({ id: p.id, angle: a, shot, selected: true, retaken, superseded: false, width: null, height: null, thumbUrl: url, previewUrl: url, createdAt: p.created_at });
+    }
     return this.emit({ photos });
   }
 
@@ -431,7 +485,11 @@ class Api {
     const s = this.snap;
     switch (cmd.type) {
       case 'begin':
-        if (st !== 'PAYMENT_SUCCESS') return st === 'READY' ? s : invalid(st, cmd.type);
+        // Paid: pick the frame first; its slot ratio drives the capture preview.
+        if (st !== 'PAYMENT_SUCCESS') return st === 'FRAME_SELECTION' || st === 'READY' ? s : invalid(st, cmd.type);
+        return this.emit({ status: 'FRAME_SELECTION' });
+      case 'frame':
+        if (st !== 'FRAME_SELECTION') return st === 'READY' ? s : invalid(st, cmd.type);
         if (this.goId) {
           const id = this.goId;
           // Same order as the glambot kiosk: session → shooting, then robot on.
@@ -440,13 +498,14 @@ class Api {
             .then(() => go('POST', '/api/robot/enable'))
             .catch(() => undefined);
         }
-        return this.emit({ status: 'READY' });
+        return this.emit({ status: 'READY', templateId: cmd.templateId, slots: [] });
       case 'skip_angles':
         if (!CAPTURE_STATES.has(st)) return st === 'REVIEW' ? s : invalid(st, cmd.type);
         await go('POST', '/api/robot/disable').catch(() => undefined);
         await sleep(1500); // the shot in flight lands in storage
         await this.refreshPhotos();
-        return this.emit({ status: 'REVIEW', plan: { ...this.snap.plan, angles: Math.max(1, this.snap.photos.length) } });
+        // All angles stay listed; the ones never shot show as empty in Review.
+        return this.emit({ status: 'REVIEW', capture: { ...this.snap.capture, retakeAngle: null } });
       case 'move':
         if (st === 'READY') return this.emit({ status: 'ROBOT_MOVING', capture: { ...s.capture, angle: cmd.angle, shot: 0 } });
         return s;
@@ -458,16 +517,18 @@ class Api {
       case 'resume':
       case 'prerender':
         return s;
-      case 'retake':
-        return invalid(st, cmd.type);
+      case 'retake': {
+        if (st !== 'REVIEW' || !canRetake(s.retakenAngles, cmd.angle, s.plan.retakeLimit, s.plan.angles)) return invalid(st, cmd.type);
+        // Robot shoots only this pose (1-based position in the dobot sequence).
+        await this.enableRobot({ only: [cmd.angle + 1] });
+        return this.emit({ status: 'RETAKE', retakenAngles: [...s.retakenAngles, cmd.angle], capture: { ...s.capture, angle: cmd.angle, retakeAngle: cmd.angle } });
+      }
       case 'select_angle':
         return this.emit({ photos: s.photos.map((p) => (p.angle === cmd.angle ? { ...p, selected: cmd.photoIds.includes(p.id) } : p)) });
       case 'choose_frame':
-        return st === 'REVIEW' ? this.emit({ status: 'FRAME_SELECTION' }) : invalid(st, cmd.type);
+        return st === 'REVIEW' ? this.emit({ status: 'PHOTO_SELECTION', slots: [] }) : invalid(st, cmd.type);
       case 'set_template':
         return this.emit({ templateId: cmd.templateId });
-      case 'frame':
-        return st === 'FRAME_SELECTION' ? this.emit({ status: 'PHOTO_SELECTION', templateId: cmd.templateId, slots: [] }) : invalid(st, cmd.type);
       case 'photos': {
         if (st !== 'PHOTO_SELECTION') invalid(st, cmd.type);
         const slots = cmd.photoIds.map((photoId, slotIndex) => ({ slotIndex, photoId, edit: s.slots.find((x) => x.photoId === photoId)?.edit ?? defaultEdit() }));
@@ -485,7 +546,7 @@ class Api {
       }
       case 'confirm':
       case 'auto_complete': {
-        const ok = cmd.type === 'confirm' ? st === 'FINAL_PREVIEW' : ['REVIEW', 'FRAME_SELECTION', 'PHOTO_SELECTION', 'EDITING', 'FINAL_PREVIEW'].includes(st);
+        const ok = cmd.type === 'confirm' ? st === 'FINAL_PREVIEW' : ['REVIEW', 'PHOTO_SELECTION', 'EDITING', 'FINAL_PREVIEW'].includes(st);
         if (!ok) invalid(st, cmd.type);
         const t = this.templateFor(s);
         let slots = s.slots;
@@ -512,6 +573,18 @@ class Api {
     }
   }
 
+  /** Dobot answers 409 while the previous disable is still homing; retry until it is off. */
+  private async enableRobot(body: { only: number[] }) {
+    for (let i = 0; ; i++) {
+      try {
+        return await go('POST', '/api/robot/enable', body);
+      } catch (e) {
+        if (i >= 12) throw new ApiError(503, 'ROBOT_UNAVAILABLE', (e as Error).message, 'Robot belum siap. Coba lagi sebentar.');
+        await sleep(1500);
+      }
+    }
+  }
+
   private templateFor(s: SessionSnapshot): PhotoTemplate {
     const n = activePhotos(s.photos).length;
     return this.templates.find((t) => t.id === s.templateId) ?? this.templates.find((t) => t.photoCount <= n) ?? this.templates[0];
@@ -522,6 +595,7 @@ class Api {
     const id = this.sessionId;
     const goId = this.goId;
     const alive = () => this.sessionId === id && !!this.snap;
+    let links: Promise<{ url: string; preview?: string }> | null = null;
     try {
       if (!goId) throw new Error('Sesi glambot tidak ditemukan');
       const s = this.snap!;
@@ -536,14 +610,15 @@ class Api {
       form.append('photoIds', JSON.stringify(slots.map((x) => x.photoId)));
       form.append('filter', slots[0]?.edit.filter ?? 'original');
       form.append('slotTransforms', JSON.stringify(slots.map((x) => ({ scale: x.edit.zoom, angle: x.edit.rotation, offsetX: x.edit.x, offsetY: x.edit.y }))));
-      await go('POST', '/api/photo/compose', undefined, form, 60000);
+      const composed = await go<{ preview_url?: string }>('POST', '/api/photo/compose', undefined, form, 60000);
       if (!alive()) return;
+      // Resolved alongside printing so the QR screen usually opens without waiting.
+      links = galleryLinks(goId, composed?.preview_url);
       this.emit({ status: 'PRINTING', print: { ...this.snap!.print!, status: 'PRINTING', progress: 30 } });
     } catch (e) {
       if (alive()) this.emit({ status: 'ERROR', print: { ...this.snap!.print!, status: 'FAILED', error: (e as Error).message, userMessage: 'Gagal menyimpan foto.' } });
       return;
     }
-    const gallery = { url: `${DOWNLOAD_URL()}/download-photos/${goId}`, expiresAt: new Date(Date.now() + 864e5).toISOString() };
     try {
       await go('POST', '/api/photo/print', { session_id: goId }, undefined, 60000);
       if (!alive()) return;
@@ -554,7 +629,8 @@ class Api {
       const msg = (e as Error).message;
       this.emit({ status: 'PRINT_FAILED', print: { ...this.snap!.print!, status: 'FAILED', error: msg, userMessage: msg } });
     }
-    if (alive()) this.emit({ status: 'QR_READY', gallery });
+    const { url, preview } = await links!;
+    if (alive()) this.emit({ status: 'QR_READY', gallery: { url, preview, expiresAt: new Date(Date.now() + 864e5).toISOString() } });
   }
 
   /** In-process "server push" (replaces the SSE stream). */

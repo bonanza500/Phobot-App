@@ -54,6 +54,17 @@ img {
 .cam .stat {
   z-index: 2;
 }
+.cam .slot-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.cam .slot-hole {
+  position: absolute;
+  /* the spread dims everything outside; .cam clips it */
+  box-shadow: 0 0 0 9999px rgba(20, 18, 40, 0.5);
+}
 .cam .live.off {
   background: var(--mu);
 }
@@ -305,6 +316,10 @@ img {
 .review-photo.sel {
   box-shadow: 0 0 0 4px rgba(91, 124, 250, 0.18), 0 10px 22px rgba(91, 124, 250, 0.24);
 }
+.review-empty {
+  background: linear-gradient(180deg, #f3f5f8, #e9edf2);
+  border: 4px dashed #d8dee6 !important;
+}
 .review-selected {
   position: absolute;
   left: 8px;
@@ -329,6 +344,131 @@ img {
 .retake-stat {
   border: 3px solid rgba(255, 199, 222, 0.9);
   background: rgba(255, 248, 252, 0.94);
+}
+
+/* Welcome: robot is the touch target (bubble, rings, nudging arrows) */
+.wel-bot {
+  position: absolute;
+  left: 1250px;
+  top: 225px;
+  width: 620px;
+  height: 650px;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.wel-bot:focus-visible .wel-press {
+  filter: drop-shadow(0 0 10px rgba(91, 124, 250, 0.55));
+}
+.wel-press {
+  position: absolute;
+  inset: 0;
+  transition: transform 0.15s ease;
+}
+.wel-bot:not(.go):active .wel-press {
+  transform: scale(0.94);
+}
+.wel-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 440px;
+  height: 440px;
+  margin: -220px 0 0 -220px;
+  border: 8px solid var(--bl);
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  animation: wrg 2.8s ease-out infinite;
+}
+.wel-ring:nth-child(2) {
+  animation-delay: 0.93s;
+}
+.wel-ring:nth-child(3) {
+  animation-delay: 1.86s;
+}
+@keyframes wrg {
+  from {
+    transform: scale(0.6);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+}
+.wel-bubble {
+  position: absolute;
+  top: -60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+}
+.wel-bubble > div {
+  position: relative;
+  background: #fff;
+  border-radius: 999px;
+  padding: 16px 42px;
+  font-size: 46px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(43, 42, 76, 0.1);
+  animation: wbb 2s ease-in-out infinite;
+}
+.wel-bubble > div::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -12px;
+  width: 28px;
+  height: 28px;
+  margin-left: -14px;
+  background: #fff;
+  border-radius: 0 0 7px 0;
+  transform: rotate(45deg);
+}
+@keyframes wbb {
+  50% {
+    transform: translateY(-12px);
+  }
+}
+.wel-bot.go .wel-ring,
+.wel-bot.go .wel-bubble {
+  opacity: 0;
+  animation: none;
+  transition: opacity 0.2s ease;
+}
+.wel-arrows {
+  display: flex;
+}
+.wel-arrows .ic {
+  margin-left: -34px;
+  opacity: 0.5;
+  animation: wnd 1.8s ease-in-out infinite;
+}
+.wel-arrows .ic:first-child {
+  margin-left: 0;
+}
+.wel-arrows .ic:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.wel-arrows .ic:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes wnd {
+  50% {
+    transform: translateX(18px);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wel-ring {
+    display: none;
+  }
+  .wel-arrows .ic {
+    opacity: 1;
+  }
 }
 
 /* Development toolbar (only with ?dev in non-production builds) */

@@ -13,7 +13,7 @@ test('a paid session survives a booth reload and resumes capture', async ({ page
   await expect(page.locator('[data-testid=qris] svg')).toBeVisible();
   await payCurrentQr(page);
   await screen(page, 'session', 30_000);
-  await expect(page.getByTestId('session-angle')).toContainText('SUDUT 02', { timeout: 30_000 });
+  await expect(page.getByTestId('session-angle')).toContainText('ANGLE 02', { timeout: 30_000 });
   await page.reload();
   // The same session is recovered from the server and continues where it stopped.
   await screen(page, 'ready', 30_000);

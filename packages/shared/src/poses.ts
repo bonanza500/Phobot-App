@@ -16,7 +16,7 @@ export const TIPS: ReadonlyArray<ReadonlyArray<PoseTip>> = [
   [['POSE', 'Bentuk hati', 'Buat hati dengan tangan, sendiri atau berdua', 'heart'], ['GAYA', 'Mengintip', 'Tutup satu mata, senyum miring', 'peek']],
   [['POSE', 'Tunjuk kamera', 'Telunjuk ke lensa sambil berkedip', 'point'], ['MIMIK', 'Serius total', 'Tatapan tajam, tanpa senyum', 'serious']],
   [['POSE', 'Tangan ke atas', 'Seperti baru menang lomba', 'arms'], ['GAYA', 'Lompat kecil', 'Tekuk lutut, siap melayang', 'hop']],
-  [['MIMIK', 'Senyum favoritmu', 'Pilih ekspresi terbaikmu', 'fav'], ['POSE', 'Bebas berkreasi', 'Ini sudut terakhir, buat sesukamu', 'free']],
+  [['MIMIK', 'Senyum favoritmu', 'Pilih ekspresi terbaikmu', 'fav'], ['POSE', 'Bebas berkreasi', 'Ini angle terakhir, buat sesukamu', 'free']],
 ] as const;
 
 const FLAT_TIPS: PoseTip[] = TIPS.flatMap((a) => a);
@@ -30,11 +30,40 @@ export function tipFor(angleIndex: number, shotIndex: number, shotsPerAngle: num
   return FLAT_TIPS[(i + FLAT_TIPS.length) % FLAT_TIPS.length];
 }
 
+/**
+ * Like `tipFor`, but over a per-session shuffle of all tips: random order, no
+ * repeats until the list wraps, and stable for the same seed (reload-safe).
+ */
+export function sessionTip(seed: string, angleIndex: number, shotIndex: number, shotsPerAngle: number): PoseTip {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  const rnd = () => {
+    h = (h + 0x6d2b79f5) | 0;
+    let x = Math.imul(h ^ (h >>> 15), 1 | h);
+    x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  const order = FLAT_TIPS.slice();
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  const i = (angleIndex * shotsPerAngle + shotIndex) % order.length;
+  return order[(i + order.length) % order.length];
+}
+
 /** Short pose names shown in the live-view status pill. */
 export const POSE_NAMES: Record<string, string> = {
   wave: 'Halo!', grin: 'Cheese!', peace: 'Peace', lean: 'Santai', shock: 'Kaget', cheek: 'Manis', cool: 'Cool',
   thumbs: 'Jempol', hug: 'Rangkul', laugh: 'Ngakak', model: 'Model', pout: 'Manyun', heart: 'Love', peek: 'Ngintip',
   point: 'Tunjuk', serious: 'Serius', arms: 'Hore!', hop: 'Lompat', fav: 'Senyum', free: 'Bebas',
+};
+
+/** Word shouted on the shutter, matched to the pose. */
+export const SNAP_WORDS: Record<string, string> = {
+  wave: 'Haii!', grin: 'Cheese!', peace: 'Peace!', lean: 'Santuy~', shock: 'Wooow!', cheek: 'Gemes~', cool: 'Keren!',
+  thumbs: 'Mantul!', hug: 'Bestie!', laugh: 'Hahaha!', model: 'Slay!', pout: 'Muach!', heart: 'Love you!', peek: 'Cilukba!',
+  point: 'Kamu!', serious: 'Fokus!', arms: 'Horee!', hop: 'Hop!', fav: 'Senyum!', free: 'Bebas!',
 };
 
 /** Category chip colours (prototype KC). */
