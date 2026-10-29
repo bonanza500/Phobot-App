@@ -1,4 +1,4 @@
-// Run from UI-DOBOT: node prototype/start/check.mjs
+// Run from the Phobot App root: node prototype/start/check.mjs
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';

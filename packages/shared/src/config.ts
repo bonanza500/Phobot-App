@@ -32,7 +32,7 @@ export const DEFAULT_ANGLES: AngleConfig[] = [
 ];
 
 export const CAMERA_DRIVERS = ['webcam', 'mock', 'gphoto2', 'digicamcontrol', 'command'] as const;
-export const ROBOT_DRIVERS = ['mock', 'serial', 'tcp', 'websocket', 'rest', 'mqtt'] as const;
+export const ROBOT_DRIVERS = ['mock', 'jona', 'serial', 'tcp', 'websocket', 'rest', 'mqtt'] as const;
 export const PRINTER_DRIVERS = ['mock', 'system'] as const;
 
 const rotation = z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]);

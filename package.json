@@ -13,6 +13,7 @@
     "node": ">=20.11"
   },
   "scripts": {
+    "jona-bridge": "tsx scripts/jona-bridge.ts",
     "dev": "node scripts/dev.mjs",
     "dev:server": "npm run dev -w @photobooth/server",
     "dev:booth": "npm run dev -w @photobooth/booth",

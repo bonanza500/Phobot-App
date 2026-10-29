@@ -3,13 +3,13 @@ import react from '@vitejs/plugin-react';
 
 /** glambot Go backend (API, /storage photos & frames, /health). */
 const API = process.env.VITE_API_PROXY ?? 'http://localhost:8080';
-/** dobot Flask service (sequence state at /detection). */
+/** Jona bridge (scripts/jona-bridge.ts) (sequence state at /detection). */
 const ROBOT = process.env.VITE_ROBOT_PROXY ?? 'http://localhost:5001';
 const proxy = {
   '/api': { target: API, changeOrigin: false },
   '/storage': { target: API, changeOrigin: false },
   '/health': { target: API, changeOrigin: false },
-  '/dobot': { target: ROBOT, changeOrigin: true, rewrite: (p: string) => p.replace(/^\/dobot/, '') },
+  '/jona': { target: ROBOT, changeOrigin: true, rewrite: (p: string) => p.replace(/^\/jona/, '') },
 };
 
 export default defineConfig({

@@ -21,7 +21,7 @@ import { composeFrame } from '../compose';
 /**
  * Booth ↔ glambot adapter. The booth UI keeps talking in SessionSnapshots and
  * commands; this module runs that state machine locally in the browser and maps
- * it onto the glambot Go backend (:8080, proxied by Vite) and the dobot Flask
+ * it onto the glambot Go backend (:8080, proxied by Vite) and the Jona bridge
  * service (:5001). Go stays the source of truth for payment, photos, frames,
  * compose and print.
  */
@@ -64,7 +64,7 @@ export const newRequestId = () =>
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const env = import.meta.env as Record<string, string | undefined>;
 const host = () => `${location.protocol}//${location.hostname}`;
-export const ROBOT_URL = env.VITE_ROBOT_URL?.trim() || '/dobot';
+export const ROBOT_URL = env.VITE_ROBOT_URL?.trim() || '/jona';
 const DOWNLOAD_URL = () => env.VITE_DOWNLOAD_PUBLIC_URL?.trim() || `${host()}:3000`;
 
 /**
@@ -519,7 +519,7 @@ class Api {
         return s;
       case 'retake': {
         if (st !== 'REVIEW' || !canRetake(s.retakenAngles, cmd.angle, s.plan.retakeLimit, s.plan.angles)) return invalid(st, cmd.type);
-        // Robot shoots only this pose (1-based position in the dobot sequence).
+        // Robot shoots only this pose (1-based position in the Jona sequence).
         await this.enableRobot({ only: [cmd.angle + 1] });
         return this.emit({ status: 'RETAKE', retakenAngles: [...s.retakenAngles, cmd.angle], capture: { ...s.capture, angle: cmd.angle, retakeAngle: cmd.angle } });
       }
@@ -573,7 +573,7 @@ class Api {
     }
   }
 
-  /** Dobot answers 409 while the previous disable is still homing; retry until it is off. */
+  /** Jona bridge answers 409 while the previous disable is still homing; retry until it is off. */
   private async enableRobot(body: { only: number[] }) {
     for (let i = 0; ; i++) {
       try {

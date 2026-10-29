@@ -396,6 +396,127 @@ export class SerialTransport extends EventEmitter implements Transport {
   }
 }
 
+// ------------------------------------------------------------------ Jona (STM32 USB CDC, plain text)
+
+/**
+ * Jona firmware protocol (text lines, no ids):
+ *   → HOME | JG:j0:j1:j2:j3:j4:j5 (absolute deg) | ?  (status) | ' ' (single space = e-stop, no newline)
+ *   ← "J0 (M0): 12.00 deg  step=123  tgt=456  v=200 us" x6 for "?", "ERR: ..." / "IK FAIL" on errors
+ * Move done = every joint has step == tgt on two consecutive polls. Angle position must carry
+ * `joints: number[6]`. Never send bare lowercase a d w s q e — firmware treats them as jog keys.
+ */
+export class JonaRobotController extends BaseRobot {
+  readonly driver = 'jona';
+  private buffer = '';
+  private joints = new Map<number, { step: number; tgt: number }>();
+  private lastErr: string | null = null;
+
+  constructor(
+    private readonly transport: Transport,
+    private readonly opts: { moveTimeoutMs: number; pollMs?: number },
+  ) {
+    super();
+    transport.on('data', (c: string) => this.onData(c));
+    transport.on('close', () => (this.state = 'disconnected'));
+    transport.on('error', (e: Error) => (this.lastError = e.message));
+  }
+
+  private onData(chunk: string) {
+    this.buffer += chunk;
+    let i: number;
+    while ((i = this.buffer.indexOf('\n')) >= 0) {
+      const line = this.buffer.slice(0, i).trim();
+      this.buffer = this.buffer.slice(i + 1);
+      const m = /^J(\d) \(M\d+\):.*step=(-?\d+)\s+tgt=(-?\d+)/.exec(line);
+      if (m) this.joints.set(+m[1], { step: +m[2], tgt: +m[3] });
+      else if (/^ERR|IK FAIL/.test(line)) this.lastErr = line;
+    }
+    if (this.buffer.length > 100_000) this.buffer = '';
+  }
+
+  private sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  private send(cmd: string) {
+    if (!this.transport.isOpen) throw new RobotError('ROBOT_DISCONNECTED', 'Robot not connected');
+    this.transport.send(cmd + '\n');
+  }
+
+  private async poll(): Promise<boolean> {
+    this.joints.clear();
+    this.send('?');
+    for (let t = 0; t < 20 && this.joints.size < 6; t++) await this.sleep(50);
+    if (this.joints.size < 6) throw new RobotError('ROBOT_TIMEOUT', 'Jona did not answer status');
+    return [...this.joints.values()].every((j) => j.step === j.tgt);
+  }
+
+  private async waitIdle() {
+    const end = Date.now() + this.opts.moveTimeoutMs;
+    let still = 0;
+    while (Date.now() < end) {
+      if (this.lastErr) throw new RobotError('ROBOT_REJECTED', this.lastErr);
+      still = (await this.poll()) ? still + 1 : 0;
+      if (still >= 2) return;
+      await this.sleep(this.opts.pollMs ?? 150);
+    }
+    throw new RobotError('ROBOT_TIMEOUT', `Jona move not finished within ${this.opts.moveTimeoutMs}ms`);
+  }
+
+  private async run(state: RobotState, cmd: string) {
+    this.state = state;
+    this.lastErr = null;
+    try {
+      this.send(cmd);
+      await this.sleep(150); // let firmware parse + reject bad commands before first poll
+      await this.waitIdle();
+      this.state = 'idle';
+    } catch (err) {
+      this.state = 'error';
+      this.lastError = (err as Error).message;
+      throw err;
+    }
+  }
+
+  async connect(): Promise<void> {
+    if (this.transport.isOpen) return;
+    this.state = 'connecting';
+    try {
+      await this.transport.open();
+      await this.sleep(300);
+      await this.poll();
+      this.state = 'idle';
+    } catch (err) {
+      this.state = 'error';
+      this.lastError = (err as Error).message;
+      throw new RobotError('ROBOT_DISCONNECTED', `Cannot connect to Jona: ${(err as Error).message}`);
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    await this.transport.close();
+    this.state = 'disconnected';
+  }
+
+  async home(): Promise<void> {
+    await this.run('homing', 'HOME');
+    this.angle = null;
+  }
+
+  async moveToAngle(angle: number): Promise<void> {
+    const a = this.positionFor(angle);
+    const j = a.position.joints;
+    if (!Array.isArray(j) || j.length !== 6 || !j.every((v) => Number.isFinite(v)))
+      throw new RobotError('ROBOT_UNKNOWN_ANGLE', `Angle ${angle} needs position.joints = 6 numbers`);
+    await this.run('moving', `JG:${j.join(':')}`);
+    this.angle = angle;
+    if (a.settleMs) await this.sleep(a.settleMs);
+  }
+
+  async stop(): Promise<void> {
+    if (this.transport.isOpen) this.transport.send(' ');
+    this.state = 'stopped';
+  }
+}
+
 // ------------------------------------------------------------------ REST
 
 /**
@@ -532,7 +653,7 @@ export class MqttTransport extends EventEmitter implements Transport {
 // ------------------------------------------------------------------ factory
 
 export interface RobotConfig {
-  driver: 'mock' | 'serial' | 'tcp' | 'websocket' | 'rest' | 'mqtt';
+  driver: 'mock' | 'jona' | 'serial' | 'tcp' | 'websocket' | 'rest' | 'mqtt';
   host: string;
   port: number;
   serialPort: string;
@@ -548,6 +669,8 @@ export interface RobotConfig {
 export function createRobotController(cfg: RobotConfig): RobotController {
   const opts = { moveTimeoutMs: cfg.moveTimeoutMs };
   switch (cfg.driver) {
+    case 'jona':
+      return new JonaRobotController(new SerialTransport(cfg.serialPort, cfg.baudRate), opts);
     case 'serial':
       return new JsonLineRobotController('serial', new SerialTransport(cfg.serialPort, cfg.baudRate), opts);
     case 'tcp':

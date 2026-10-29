@@ -87,7 +87,7 @@ const envSchema = z.object({
   CAMERA_CAPTURE_COMMAND: z.string().optional(),
   CAMERA_PREVIEW_URL: z.string().optional(),
 
-  ROBOT_DRIVER: z.enum(['mock', 'serial', 'tcp', 'websocket', 'rest', 'mqtt']).optional(),
+  ROBOT_DRIVER: z.enum(['mock', 'jona', 'serial', 'tcp', 'websocket', 'rest', 'mqtt']).optional(),
   ROBOT_HOST: z.string().optional(),
   ROBOT_PORT: optInt,
   ROBOT_SERIAL_PORT: z.string().optional(),

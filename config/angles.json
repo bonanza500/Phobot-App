@@ -1,15 +1,15 @@
 {
-  "$comment": "Physical robot positions for angles 1..N. 'position' is forwarded verbatim to the robot controller (units are defined by your robot firmware). Editable from Admin → Configuration → Angles.",
+  "$comment": "Jona robot poses for angles 1..N. position.joints = 6 absolute joint degrees (J0..J5) sent as JG:j0:..:j5. Angle N = preset PN. Home (0,0,0,0,0,0) is sent with HOME, not an angle. Editable from Admin → Configuration → Angles.",
   "angles": [
-    { "id": 1, "name": "Front", "position": { "pan": 0, "tilt": 0, "height": 140, "distance": 160 } },
-    { "id": 2, "name": "Front Left", "position": { "pan": -30, "tilt": 0, "height": 140, "distance": 160 } },
-    { "id": 3, "name": "Left", "position": { "pan": -60, "tilt": 5, "height": 150, "distance": 170 } },
-    { "id": 4, "name": "High Front", "position": { "pan": 0, "tilt": -20, "height": 190, "distance": 170 } },
-    { "id": 5, "name": "Low Front", "position": { "pan": 0, "tilt": 15, "height": 100, "distance": 160 } },
-    { "id": 6, "name": "Right", "position": { "pan": 60, "tilt": 5, "height": 150, "distance": 170 } },
-    { "id": 7, "name": "Front Right", "position": { "pan": 30, "tilt": 0, "height": 140, "distance": 160 } },
-    { "id": 8, "name": "Close Up", "position": { "pan": 0, "tilt": 0, "height": 145, "distance": 110 }, "settleMs": 400 },
-    { "id": 9, "name": "Wide", "position": { "pan": 0, "tilt": 0, "height": 150, "distance": 230 } },
-    { "id": 10, "name": "Top Down", "position": { "pan": 0, "tilt": -35, "height": 210, "distance": 150 }, "settleMs": 500 }
+    { "id": 1, "name": "P1", "position": { "joints": [0, -58, -68, -7, 0, 0] } },
+    { "id": 2, "name": "P2", "position": { "joints": [-66, -50, -43, 1, 0, 81] } },
+    { "id": 3, "name": "P3", "position": { "joints": [0, 36, 90, 52, 0, 0] } },
+    { "id": 4, "name": "P4", "position": { "joints": [47, -47, -45, 2, 102, -82] } },
+    { "id": 5, "name": "P5", "position": { "joints": [0, 0, 97, 103, -10, -104] } },
+    { "id": 6, "name": "P6", "position": { "joints": [60, -51, 94, 141, -2, -103] } },
+    { "id": 7, "name": "P7", "position": { "joints": [-60, -84, 4, 94, -104, 78] } },
+    { "id": 8, "name": "P8", "position": { "joints": [77, 46, 88, 35, 86, 87] } },
+    { "id": 9, "name": "P9", "position": { "joints": [0, -76, 95, 205, -13, 105] } },
+    { "id": 10, "name": "P10", "position": { "joints": [-87, 0, -81, 115, -217, -114] } }
   ]
 }

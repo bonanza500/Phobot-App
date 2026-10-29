@@ -411,7 +411,7 @@ async function runSession(retakeAngle: number | null) {
 }
 
 /**
- * The dobot sequence runs on its own (enabled by `begin`): it moves through the
+ * The Jona sequence runs on its own (enabled by `begin`): it moves through the
  * presets and the Go backend auto-captures at each one. The booth only observes
  * Flask /detection + Go /api/robot/config + the session photos and mirrors that
  * into the capture screen, then hands over to REVIEW when the sequence ends.
