@@ -398,22 +398,42 @@ export class SerialTransport extends EventEmitter implements Transport {
 
 // ------------------------------------------------------------------ Jona (STM32 USB CDC, plain text)
 
+/** Per-joint spec. Gear ratios/pulses must match App/Robotconfig.h; limits mirror its JOINT_LIMIT_*. */
+export interface JonaJoint {
+  pulsePerRev: number;
+  gearRatio: number;
+  halfPeriodUs: number; // cruise speed, = JOINT_DEFAULT_HALF_PERIOD_US
+  limitDeg: [number, number];
+}
+export const JONA_JOINTS: JonaJoint[] = [
+  { pulsePerRev: 2000, gearRatio: 50, halfPeriodUs: 150, limitDeg: [-170, 170] },
+  { pulsePerRev: 2000, gearRatio: 100, halfPeriodUs: 125, limitDeg: [-95, 90] },
+  { pulsePerRev: 2000, gearRatio: 40, halfPeriodUs: 150, limitDeg: [-89, 107] },
+  { pulsePerRev: 1600, gearRatio: 30, halfPeriodUs: 150, limitDeg: [-180, 215] },
+  { pulsePerRev: 1600, gearRatio: 15, halfPeriodUs: 150, limitDeg: [-227, 105] },
+  { pulsePerRev: 1600, gearRatio: 10, halfPeriodUs: 150, limitDeg: [-180, 180] },
+];
+
+/** Firmware ramps the first/last 5% of every move at constant acceleration (RAMP_FRACTION): ~1.05x slower than cruise overall. */
+const RAMP_TIME_FACTOR = 1.05;
+
 /**
- * Jona firmware protocol (text lines, no ids):
- *   → HOME | JG:j0:j1:j2:j3:j4:j5 (absolute deg) | ?  (status) | ' ' (single space = e-stop, no newline)
- *   ← "J0 (M0): 12.00 deg  step=123  tgt=456  v=200 us" x6 for "?", "ERR: ..." / "IK FAIL" on errors
- * Move done = every joint has step == tgt on two consecutive polls. Angle position must carry
- * `joints: number[6]`. Never send bare lowercase a d w s q e — firmware treats them as jog keys.
+ * Driver for the Jona firmware in D:\VSCode\Jona Software (text lines over USB CDC):
+ *   → HOME | JG:j0:..:j5 (absolute deg) | ?  | ' ' (bare space = e-stop, no newline)
+ *   ← "J0 (M5):  deg  step=0  tgt=0  v=300 us" x6 for "?"   |   "ERR: ..." / "IK FAIL"
+ * Never send lowercase a d w s q e (firmware jog keys): numbers use toFixed, never exponent form.
+ * "?" makes the firmware print with blocking calls, which stutters the steppers, so a move is:
+ * poll once while still, send, stay silent for the estimated travel time, poll once to confirm.
  */
 export class JonaRobotController extends BaseRobot {
   readonly driver = 'jona';
   private buffer = '';
-  private joints = new Map<number, { step: number; tgt: number }>();
+  private fw = new Map<number, { step: number; tgt: number; v: number }>();
   private lastErr: string | null = null;
 
   constructor(
     private readonly transport: Transport,
-    private readonly opts: { moveTimeoutMs: number; pollMs?: number },
+    private readonly opts: { moveTimeoutMs: number },
   ) {
     super();
     transport.on('data', (c: string) => this.onData(c));
@@ -427,47 +447,62 @@ export class JonaRobotController extends BaseRobot {
     while ((i = this.buffer.indexOf('\n')) >= 0) {
       const line = this.buffer.slice(0, i).trim();
       this.buffer = this.buffer.slice(i + 1);
-      const m = /^J(\d) \(M\d+\):.*step=(-?\d+)\s+tgt=(-?\d+)/.exec(line);
-      if (m) this.joints.set(+m[1], { step: +m[2], tgt: +m[3] });
+      const m = /^J(\d) \(M\d+\):.*step=(-?\d+)\s+tgt=(-?\d+)\s+v=(\d+)/.exec(line);
+      if (m) this.fw.set(+m[1], { step: +m[2], tgt: +m[3], v: +m[4] });
       else if (/^ERR|IK FAIL/.test(line)) this.lastErr = line;
     }
     if (this.buffer.length > 100_000) this.buffer = '';
   }
 
   private sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  private steps = (i: number, deg: number) => Math.round((deg / 360) * JONA_JOINTS[i].pulsePerRev * JONA_JOINTS[i].gearRatio);
 
   private send(cmd: string) {
     if (!this.transport.isOpen) throw new RobotError('ROBOT_DISCONNECTED', 'Robot not connected');
     this.transport.send(cmd + '\n');
   }
 
-  private async poll(): Promise<boolean> {
-    this.joints.clear();
+  /** Ask the firmware where every joint is. */
+  private async poll() {
+    this.fw.clear();
     this.send('?');
-    for (let t = 0; t < 20 && this.joints.size < 6; t++) await this.sleep(50);
-    if (this.joints.size < 6) throw new RobotError('ROBOT_TIMEOUT', 'Jona did not answer status');
-    return [...this.joints.values()].every((j) => j.step === j.tgt);
+    for (let t = 0; t < 30 && this.fw.size < JONA_JOINTS.length; t++) await this.sleep(50);
+    if (this.fw.size < JONA_JOINTS.length) throw new RobotError('ROBOT_TIMEOUT', 'Jona did not answer status');
   }
 
-  private async waitIdle() {
-    const end = Date.now() + this.opts.moveTimeoutMs;
-    let still = 0;
-    while (Date.now() < end) {
-      if (this.lastErr) throw new RobotError('ROBOT_REJECTED', this.lastErr);
-      still = (await this.poll()) ? still + 1 : 0;
-      if (still >= 2) return;
-      await this.sleep(this.opts.pollMs ?? 150);
-    }
-    throw new RobotError('ROBOT_TIMEOUT', `Jona move not finished within ${this.opts.moveTimeoutMs}ms`);
-  }
+  private idle = () => [...this.fw.values()].every((j) => j.step === j.tgt);
 
-  private async run(state: RobotState, cmd: string) {
-    this.state = state;
-    this.lastErr = null;
-    try {
+  /** Move every joint to absolute degrees. Confirms with the firmware's own target, so a dropped command is retried. */
+  private async goto(degs: number[], cmd: string) {
+    const want = degs.map((d, i) => this.steps(i, d));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await this.poll(); // arm is still here: no stutter
+      let est = 0;
+      want.forEach((w, i) => {
+        const j = this.fw.get(i)!;
+        est = Math.max(est, Math.abs(w - j.tgt) * 2 * JONA_JOINTS[i].halfPeriodUs * 1e-6);
+      });
+      if (want.every((w, i) => Math.abs(this.fw.get(i)!.tgt - w) <= 2) && this.idle()) return; // already there
+      this.lastErr = null;
       this.send(cmd);
-      await this.sleep(150); // let firmware parse + reject bad commands before first poll
-      await this.waitIdle();
+      await this.sleep(est * RAMP_TIME_FACTOR * 1000 + 300);
+      const end = Date.now() + this.opts.moveTimeoutMs;
+      for (;;) {
+        await this.poll();
+        if (this.lastErr) throw new RobotError('ROBOT_REJECTED', this.lastErr);
+        if (!want.every((w, i) => Math.abs(this.fw.get(i)!.tgt - w) <= 2)) break; // command not applied → retry
+        if (this.idle()) return;
+        if (Date.now() > end) throw new RobotError('ROBOT_TIMEOUT', `Jona move not finished within ${this.opts.moveTimeoutMs}ms`);
+        await this.sleep(400); // still stepping (slower than estimated): poll rarely
+      }
+    }
+    throw new RobotError('ROBOT_REJECTED', this.lastErr ?? 'Jona did not accept the move');
+  }
+
+  private async run(state: RobotState, degs: number[], cmd: string) {
+    this.state = state;
+    try {
+      await this.goto(degs, cmd);
       this.state = 'idle';
     } catch (err) {
       this.state = 'error';
@@ -497,16 +532,20 @@ export class JonaRobotController extends BaseRobot {
   }
 
   async home(): Promise<void> {
-    await this.run('homing', 'HOME');
+    await this.run('homing', JONA_JOINTS.map(() => 0), 'HOME');
     this.angle = null;
   }
 
   async moveToAngle(angle: number): Promise<void> {
     const a = this.positionFor(angle);
     const j = a.position.joints;
-    if (!Array.isArray(j) || j.length !== 6 || !j.every((v) => Number.isFinite(v)))
-      throw new RobotError('ROBOT_UNKNOWN_ANGLE', `Angle ${angle} needs position.joints = 6 numbers`);
-    await this.run('moving', `JG:${j.join(':')}`);
+    if (!Array.isArray(j) || j.length !== JONA_JOINTS.length || !j.every((v) => Number.isFinite(v)))
+      throw new RobotError('ROBOT_UNKNOWN_ANGLE', `Angle ${angle} needs position.joints = ${JONA_JOINTS.length} numbers`);
+    j.forEach((v: number, i: number) => {
+      const [lo, hi] = JONA_JOINTS[i].limitDeg;
+      if (v < lo || v > hi) throw new RobotError('ROBOT_REJECTED', `Angle ${angle}: J${i} ${v}° outside [${lo}, ${hi}]`);
+    });
+    await this.run('moving', j, `JG:${j.map((v: number) => v.toFixed(2)).join(':')}`);
     this.angle = angle;
     if (a.settleMs) await this.sleep(a.settleMs);
   }
