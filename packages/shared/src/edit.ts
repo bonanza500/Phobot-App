@@ -84,6 +84,20 @@ export function applyPinch(
   };
 }
 
+/** Keep the photo covering its whole slot: no rotation, zoom ≥ 1, pan only within the zoom margin. */
+export function fitEdit(e: EditParams): EditParams {
+  const zoom = Math.max(1, e.zoom);
+  const m = (zoom - 1) / 2;
+  return { ...e, rotation: 0, zoom, x: round(clamp(e.x, -m, m)), y: round(clamp(e.y, -m, m)) };
+}
+
+/** Restore the default crop when the edited photo would leave any slot area uncovered. */
+export function restoreIfUncovered(e: EditParams): EditParams {
+  const fitted = fitEdit(e);
+  const crop = visibleCrop(fitted);
+  return crop.x < 0 || crop.y < 0 || crop.x + crop.w > 1 || crop.y + crop.h > 1 ? defaultEdit() : fitted;
+}
+
 /** Mouse wheel zoom (desktop / admin preview). */
 export function applyWheel(base: EditParams, deltaY: number): EditParams {
   const factor = Math.exp(-deltaY * 0.0015);

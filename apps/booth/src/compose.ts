@@ -1,4 +1,5 @@
 import { computeFrameLayout, filterById, type EditParams, type PhotoDTO, type PhotoTemplate } from '@photobooth/shared';
+import { stickerArt, type Sticker } from './stickers';
 
 const load = (src: string) =>
   new Promise<HTMLImageElement>((res, rej) => {
@@ -14,7 +15,7 @@ const load = (src: string) =>
  * translate/rotate/scale + CSS filter, clipped to the slot, artwork on top) and
  * returns a JPEG for POST /api/photo/compose.
  */
-export async function composeFrame(t: PhotoTemplate, photos: (PhotoDTO | undefined)[], edits: Record<number, EditParams>): Promise<Blob> {
+export async function composeFrame(t: PhotoTemplate, photos: (PhotoDTO | undefined)[], edits: Record<number, EditParams>, stickers: Sticker[] = []): Promise<Blob> {
   const H = t.overlay ? t.overlay.height * 3 : 1800;
   const L = computeFrameLayout(t, H);
   const c = document.createElement('canvas');
@@ -48,6 +49,13 @@ export async function composeFrame(t: PhotoTemplate, photos: (PhotoDTO | undefin
   });
 
   if (t.overlay) ctx.drawImage(await load(t.overlay.image), 0, 0, c.width, c.height);
+  for (const st of stickers) {
+    const art = stickerArt(st.k);
+    if (!art) continue;
+    const w = st.s * c.width;
+    const h = w * art.ratio;
+    ctx.drawImage(await load(art.url), st.x * c.width - w / 2, st.y * c.height - h / 2, w, h);
+  }
 
   return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Export frame gagal'))), 'image/jpeg', 0.92));
 }

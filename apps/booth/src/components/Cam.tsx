@@ -14,6 +14,8 @@ function useJpegPollCanvas(url: string | null | undefined, ref: { current: HTMLC
     let n = 0;
     const next = (ms: number) => !stop && setTimeout(load, ms);
     const load = () => {
+      // Shutter pressed: leave digiCam alone until the photo is saved.
+      if (useBooth.getState().capture.freeze) return next(200);
       const img = new Image();
       img.onload = () => {
         const c = ref.current;
@@ -37,8 +39,9 @@ function useJpegPollCanvas(url: string | null | undefined, ref: { current: HTMLC
 const delay = (w: number) => `-${((Date.now() / 1000) % w).toFixed(2)}s`;
 
 /**
- * prototype cam(): the camera container (corner frame, LIVE badge, countdown,
- * flash, status pill). Production: shows the REAL live view —
+ * prototype cam(): the camera container. Only the live view, slot mask and
+ * flash sit inside; LIVE badge, countdown and status live outside the preview.
+ * Production: shows the REAL live view —
  *  - webcam: <video> from getUserMedia
  *  - DSLR via server driver: MJPEG <img>
  *  - mock camera: the prototype's animated gradient + silhouette placeholder
@@ -76,15 +79,25 @@ export function Cam({ children, style, ratio }: { children?: ReactNode; style?: 
 // ponytail: Canon EOS R100 saves 6000×3368 (16:9). Change if the camera's aspect setting changes.
 const PHOTO_RATIO = 16 / 9;
 
-/** Darkens what falls outside the frame slot; the centre crop is what the frame keeps. */
+/** Blurs + darkens what falls outside the frame slot; the centre crop is what the frame keeps. */
 function SlotMask({ w, h, ratio }: { w: number; h: number; ratio: number }) {
   if (!w || !h) return null;
   const hw = Math.min(w, h * ratio);
   const hh = hw / ratio;
+  const l = (w - hw) / 2;
+  const t = (h - hh) / 2;
+  // Slot is centred and spans full width or height: the cropped-off area is two equal strips.
+  const strips: CSSProperties[] =
+    l > t
+      ? [{ top: 0, bottom: 0, left: 0, width: Math.ceil(l) }, { top: 0, bottom: 0, right: 0, width: Math.ceil(l) }]
+      : [{ left: 0, right: 0, top: 0, height: Math.ceil(t) }, { left: 0, right: 0, bottom: 0, height: Math.ceil(t) }];
   return (
-    <div className="slot-mask" aria-hidden>
-      <i className="slot-hole" style={{ left: (w - hw) / 2, top: (h - hh) / 2, width: hw, height: hh }} />
-    </div>
+    <>
+      {strips.map((s, i) => (
+        <i key={i} className="slot-mask" style={s} aria-hidden />
+      ))}
+      <i className="slot-hole" style={{ left: l, top: t, width: hw, height: hh }} aria-hidden />
+    </>
   );
 }
 
@@ -152,14 +165,20 @@ function CamBox({ children, style, hole }: { children?: ReactNode; style?: CSSPr
           </svg>
         </>
       ) : null}
-      <div className="vf">
-        <i />
-        <i />
-        <i />
-        <i />
-      </div>
-      <div className={`live ${live ? '' : 'off'}`}>● LIVE</div>
       {children}
+    </div>
+  );
+}
+
+/** LIVE badge, shown outside the preview so nothing covers the photo area. */
+export function LiveChip() {
+  const mode = useBooth((s) => s.config?.camera.mode ?? 'mock');
+  const camState = useBooth((s) => s.cameraState);
+  const live = mode === 'browser' ? ['ready', 'previewing', 'capturing'].includes(camState) : true;
+  return (
+    <div className={`chip live-chip ${live ? '' : 'off'}`}>
+      <i aria-hidden />
+      LIVE
     </div>
   );
 }

@@ -109,6 +109,13 @@ export interface BoothConfig {
   timingScale: number;
   devTools: boolean;
   mockPayment: boolean;
+  /** Admin-configured voucher shortcut on the pay screen. */
+  voucherChip?: boolean;
+  voucherChipCode?: string;
+  /** Admin choice for free sessions: skip print and deliver files by QR only. */
+  freeDigitalOnly?: boolean;
+  /** Explicit admin free/paid mode; independent of a package's price. */
+  freeMode?: boolean;
   environment: string;
 }
 

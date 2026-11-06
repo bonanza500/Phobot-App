@@ -89,6 +89,11 @@ describe('session state machine', () => {
     expect(nextState('FINISHED', 'FAIL')).toBeNull();
   });
 
+  it('sends digital-only output from render straight to gallery, without print state', () => {
+    expect(transition('RENDERING', 'RENDER_DONE_DIGITAL')).toBe('GENERATING_GALLERY');
+    expect(canTransition('GENERATING_GALLERY', 'GALLERY_READY')).toBe(true);
+  });
+
   it('maps every state to a prototype screen', () => {
     for (const s of SESSION_STATES) expect(screenForState(s)).toMatch(/^(welcome|pay|ready|session|review|tpl|pick|edit|final|print|qr|thanks|error)$/);
     expect(screenForState('COUNTDOWN')).toBe('session');

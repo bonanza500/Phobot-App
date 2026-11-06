@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { p2, retakesLeft } from '@photobooth/shared';
 import { flatPhotos, slotRatio, useBooth } from '../store';
 import { fitCards, fitGrid } from '../fitGrid';
-import { Icon, Pic } from '../components/basics';
+import { Icon, Pic, Steps } from '../components/basics';
 import { closeLightbox, retake, tapReviewPhoto, toFrames } from '../flow';
 
 /** prototype V.review */
@@ -38,18 +38,18 @@ export function Review() {
     return { cols: f.cols, h: f.frameH, w: Math.floor(f.frameH * ratio) };
   };
   return (
-    <div className="scr en" style={{ paddingTop: 40, paddingBottom: 36 }}>
-      <div className="top" style={{ height: 90, marginBottom: 24 }}>
-        <div>
-          <h2 style={{ fontSize: 52 }}>Momen manismu ✨</h2>
-          <div className="p" style={{ fontSize: 30, marginTop: 8 }}>
-            Ketuk foto untuk melihat lebih dekat · pilih {shotsPerAngle} foto terbaik per angle.
-          </div>
-        </div>
+    <div className="scr en booth-theme" style={{ paddingTop: 40, paddingBottom: 56 }}>
+      <div className="top" style={{ marginBottom: 0 }}>
         <div className={`chip ${left ? 'y' : ''}`} data-testid="retakes-left">
           {left ? `♡ ${left} kesempatan ulang` : '✓ Semua kesempatan dipakai'}
         </div>
+        <Steps cur={1} />
       </div>
+      <header className="booth-hero sm">
+        <span className="free-eyebrow"><span>✦</span> HASIL JEPRETAN ROBOT <span>✦</span></span>
+        <h1>Momen <em>manismu</em> ✨</h1>
+        <p className="p">Ketuk foto untuk melihat lebih dekat · pilih {shotsPerAngle} foto terbaik per angle.</p>
+      </header>
       <div
         ref={box}
         style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: `repeat(${g.cols}, auto)`, gap: GRID_GAP, justifyContent: 'center', alignContent: g.scroll ? 'start' : 'center', overflowX: 'hidden', overflowY: g.scroll ? 'auto' : 'hidden' }}
@@ -63,7 +63,7 @@ export function Review() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 30, fontWeight: 600, gap: 8, height: HEAD_H, whiteSpace: 'nowrap', overflow: 'hidden' }}>
                 <span>♡ Angle {p2(a + 1)}</span>
                 {m ? (
-                  <span style={{ color: 'var(--bl)', fontSize: 24 }}>
+                  <span style={{ color: '#f05b9b', fontSize: 24 }}>
                     pilih {shotsPerAngle} dari {ps.length}
                   </span>
                 ) : null}
@@ -94,6 +94,7 @@ export function Review() {
           LANJUT <Icon n="next" z={36} />
         </button>
       </div>
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> {angles} ANGLE · {flatCount} FOTO</footer>
     </div>
   );
 }

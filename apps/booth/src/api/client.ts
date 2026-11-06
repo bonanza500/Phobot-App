@@ -17,11 +17,13 @@ import {
   type SessionState,
 } from '@photobooth/shared';
 import { composeFrame } from '../compose';
+// ponytail: stickers live only in the booth store (not the session snapshot), so a booth reload drops them; add to SlotDTO/session if needed.
+import { get } from '../store';
 
 /**
  * Booth ↔ glambot adapter. The booth UI keeps talking in SessionSnapshots and
  * commands; this module runs that state machine locally in the browser and maps
- * it onto the glambot Go backend (:8080, proxied by Vite) and the Jona bridge
+ * it onto the glambot Go backend (:8080, proxied by Vite) and the Jona bridge (scripts/jona-bridge.ts, Dobot-compatible API)
  * service (:5001). Go stays the source of truth for payment, photos, frames,
  * compose and print.
  */
@@ -63,15 +65,11 @@ export const newRequestId = () =>
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const env = import.meta.env as Record<string, string | undefined>;
-const host = () => `${location.protocol}//${location.hostname}`;
 export const ROBOT_URL = env.VITE_ROBOT_URL?.trim() || '/jona';
-const DOWNLOAD_URL = () => env.VITE_DOWNLOAD_PUBLIC_URL?.trim() || `${host()}:3000`;
-
+const DOWNLOAD_URL = () => env.VITE_DOWNLOAD_PUBLIC_URL?.trim() || `${location.protocol}//${location.hostname}:8080`;
 /**
- * QR target + QR-screen preview, same rules as glambot GetPhotosScreen:
- * QR = public Google Drive folder when Drive is on (≤45s wait), else the local
- * /download-photos page. Preview = live strip GIF → framed strip → slideshow GIF,
- * preloaded so it shows at once; undefined when nothing loads (screen falls back).
+ * QR target + QR-screen preview. QR prefers a ready public Drive folder;
+ * otherwise it points to the session GIF. Preview prefers the live strip GIF.
  */
 async function galleryLinks(goId: string, strip?: string): Promise<{ url: string; preview?: string }> {
   const base = `/api/photo/session/${goId}`;
@@ -102,7 +100,7 @@ async function galleryLinks(goId: string, strip?: string): Promise<{ url: string
     return undefined;
   })();
   const [d, p] = await Promise.all([drive, preview]);
-  return { url: d?.enabled && d.ready && d.url ? d.url : `${DOWNLOAD_URL()}/download-photos/${goId}`, preview: p };
+  return { url: d?.enabled && d.ready && d.url ? d.url : `${DOWNLOAD_URL()}${base}/gif`, preview: p };
 }
 
 /* ------------------------------------------------------------------ Go HTTP */
@@ -139,6 +137,16 @@ interface GoPackage { id: number; code: string; price: number; duration_secs: nu
 interface GoSession { id: string; final_price: number; status: string; expires_at: string }
 interface GoTx { midtrans_order_id: string; status: string; qris_raw_string?: string; qris_url?: string; paid_at?: string }
 interface GoPhoto { id: string; url?: string; file_path: string; created_at: string }
+/** GET /api/config (backend/handlers/config.go timerConfig). */
+interface AppConfig {
+  freeMode?: boolean;
+  voucherChipEnabled?: boolean;
+  voucherChipCode?: string;
+  freeDigitalOnly?: boolean;
+  timeouts?: Partial<BoothConfig['timeouts']>;
+  session?: { readySeconds?: number; retakeLimit?: number; maxQuantity?: number };
+  display?: { brandLabel?: string; welcomeChip?: string };
+}
 interface GoFrame {
   id: string;
   name: string;
@@ -149,10 +157,14 @@ interface GoFrame {
   slots: { x: number; y: number; width: number; height: number; shape: string }[] | null;
 }
 export interface RobotDetection {
+  present?: boolean;
   fsm_state?: 'IDLE' | 'MOVING' | 'TRACKING' | 'CAPTURING' | 'DONE';
+  /** Robot stopped on its own (emergency stop, failed move, failed enable): nothing more will be shot. */
+  session_stopped?: boolean;
   sequence?: { index: number; total: number; seconds_left: number; complete: boolean };
 }
 export interface RobotConfig { current_preset: number; auto_capture_active: boolean; auto_capture_remaining_ms: number }
+interface VoucherResult { valid: boolean; message: string; discount_amount: number; final_price: number }
 
 function frameToTemplate(f: GoFrame): PhotoTemplate {
   const width = f.canvas_width || 464;
@@ -200,6 +212,8 @@ class Api {
   private pkg: GoPackage | null = null;
   private templates: PhotoTemplate[] = [];
   private packageDurationSecs = 600;
+  /** Admin-set per-session values (GET /api/config), copied into each new session plan. */
+  private plan = { readySeconds: DEFAULT_SETTINGS.session.readySeconds, retakeLimit: 2 };
   private listeners = new Set<(s: SessionSnapshot) => void>();
   private poll: ReturnType<typeof setInterval> | undefined;
   private paySeq = 0;
@@ -248,12 +262,17 @@ class Api {
   /* ---- boot */
 
   async config(): Promise<BoothConfig> {
+    const appConfig = await go<AppConfig>('GET', '/api/config').catch((): AppConfig => ({ voucherChipEnabled: true, voucherChipCode: 'FREE FOTO', freeDigitalOnly: false }));
     const [pkgs, frames, paymentConfig] = await Promise.all([
       go<GoPackage[]>('GET', '/api/package'),
       go<GoFrame[]>('GET', '/api/frames'),
       go<{ test_payment_enabled: boolean }>('GET', '/api/payment/config'),
     ]);
-    const priced = pkgs.filter((p) => p.print_unit_price > 0);
+    // Free Mode rewrites every price at once: a switch between these reads would pair one mode with the other's prices.
+    const after = await this.mode().catch(() => appConfig);
+    if ((after.freeMode === true) !== (appConfig.freeMode === true)) return this.config();
+    // Free mode zeroes every price, so a 0 print price must still pick the print package.
+    const priced = pkgs.filter((p) => p.print_unit_price > 0 || p.price + p.print_unit_price === 0);
     this.pkg = priced.find((p) => p.is_popular) ?? pkgs.find((p) => p.code === 'vip') ?? priced[0] ?? pkgs[0] ?? null;
     if (!this.pkg) throw new Error('Belum ada paket aktif di admin');
     this.packageDurationSecs = this.pkg.duration_secs || 600;
@@ -261,20 +280,31 @@ class Api {
     this.templates = fromAdmin.length ? fromAdmin : DEFAULT_TEMPLATES;
     const d = DEFAULT_SETTINGS;
     const { digicamUrl: _a, gphoto2Bin: _b, captureCommand: _c, previewUrl: _d, ...camera } = d.camera;
+    const s = appConfig.session ?? {};
+    this.plan = { readySeconds: s.readySeconds ?? d.session.readySeconds, retakeLimit: s.retakeLimit ?? 2 };
     return {
-      pricing: { ...d.pricing, firstPrint: this.pkg.price + this.pkg.print_unit_price, additionalPrint: this.pkg.print_unit_price },
-      session: { ...d.session, shotsPerAngle: 1, retakeLimit: 2 },
-      timeouts: d.timeouts,
+      pricing: { ...d.pricing, firstPrint: this.pkg.price + this.pkg.print_unit_price, additionalPrint: this.pkg.print_unit_price, maxQuantity: s.maxQuantity ?? d.pricing.maxQuantity },
+      session: { ...d.session, shotsPerAngle: 1, ...this.plan },
+      timeouts: { ...d.timeouts, ...appConfig.timeouts },
       // Go returns the Canon live view already mirrored.
       camera: { ...camera, mirrorPreview: false, mode: 'server', liveViewUrl: '/api/robot/liveview' },
       templates: this.templates,
       angles: DEFAULT_ANGLES.map((a) => ({ id: a.id, name: a.name })),
-      branding: d.branding,
+      branding: { label: appConfig.display?.brandLabel || d.branding.label, welcomeChip: appConfig.display?.welcomeChip || d.branding.welcomeChip },
       timingScale: 1,
       devTools: false,
       mockPayment: paymentConfig.test_payment_enabled,
+      freeMode: appConfig.freeMode === true,
+      voucherChip: appConfig.voucherChipEnabled !== false,
+      voucherChipCode: appConfig.voucherChipCode || 'FREE FOTO',
+      freeDigitalOnly: appConfig.freeDigitalOnly === true,
       environment: 'production',
     };
+  }
+
+  /** Just the admin mode flags: cheap enough to poll, unlike config(). */
+  mode(): Promise<Pick<AppConfig, 'freeMode' | 'freeDigitalOnly'>> {
+    return go<AppConfig>('GET', '/api/config');
   }
 
   async health() {
@@ -313,7 +343,7 @@ class Api {
       createdAt: now,
       paidAt: null,
       expiresAt: null,
-      plan: { angles: 10, shotsPerAngle: 1, retakeLimit: 2, countdownSeconds: 3, readySeconds: DEFAULT_SETTINGS.session.readySeconds },
+      plan: { angles: 10, shotsPerAngle: 1, countdownSeconds: 3, ...this.plan },
       payment: null,
       photos: [],
       slots: [],
@@ -375,6 +405,51 @@ class Api {
         expiresAt: r.session.expires_at,
         paidAt: paid ? now : null,
       },
+    });
+    if (!paid) this.startPoll();
+    return snap;
+  }
+
+  /** Drop the pending QR but keep the booth session, so the customer can try again. */
+  abandonPayment(): SessionSnapshot {
+    this.stopPoll();
+    this.paySeq++;
+    this.expireGo();
+    return this.emit({ status: 'SELECT_PRINT', payment: null });
+  }
+
+  async applyFreeVoucher(code: string, quantity: number): Promise<SessionSnapshot> {
+    if (!this.snap || !this.pkg || !UNPAID.includes(this.st)) throw new ApiError(409, 'INVALID_TRANSITION', 'Voucher hanya bisa dipakai sebelum pembayaran');
+    const sessionId = await go<GoSession>('POST', '/api/session/create', { packageId: this.pkg.id, printCount: quantity }).then((s) => s.id);
+    if (!sessionId) throw new ApiError(409, 'INVALID_TRANSITION', 'Sesi pembayaran belum siap');
+    const result = await go<VoucherResult>('POST', '/api/voucher/apply', { session_id: sessionId, voucher_code: code });
+    if (!result.valid) {
+      void go('PATCH', `/api/session/${sessionId}/status`, { status: 'expired' }).catch(() => undefined);
+      throw new ApiError(400, 'INVALID_VOUCHER', result.message);
+    }
+    const seq = ++this.paySeq;
+    this.stopPoll();
+    const previousGoId = this.goId;
+    const payment = await go<{ transaction: GoTx; session: GoSession }>('POST', '/api/payment/create', { session_id: sessionId }, undefined, 30000);
+    if (seq !== this.paySeq || !this.snap) {
+      void go('PATCH', `/api/session/${sessionId}/status`, { status: 'expired' }).catch(() => undefined);
+      return this.snap!;
+    }
+    if (!payment.transaction?.midtrans_order_id || (!payment.transaction.qris_raw_string && !payment.transaction.qris_url && payment.transaction.status !== 'paid'))
+      throw new ApiError(502, 'INVALID_PAYMENT_RESPONSE', 'Backend tidak mengembalikan ID transaksi atau QRIS yang valid.');
+    this.goId = sessionId;
+    this.orderId = payment.transaction.midtrans_order_id;
+    if (previousGoId) void go('PATCH', `/api/session/${previousGoId}/status`, { status: 'expired' }).catch(() => undefined);
+    const paid = payment.transaction.status === 'paid' || payment.session.status === 'paid';
+    const now = new Date().toISOString();
+    const snap = this.emit({
+      code: sessionId.slice(0, 8).toUpperCase(),
+      status: paid ? 'PAYMENT_SUCCESS' : 'WAITING_PAYMENT',
+      quantity,
+      amount: payment.session.final_price,
+      expiresAt: payment.session.expires_at,
+      paidAt: paid ? now : null,
+      payment: { id: payment.transaction.midtrans_order_id, provider: 'midtrans', status: paid ? 'PAID' : 'PENDING', amount: payment.session.final_price, quantity, qrString: payment.transaction.qris_raw_string || payment.transaction.qris_url || '', expiresAt: payment.session.expires_at, paidAt: paid ? now : null },
     });
     if (!paid) this.startPoll();
     return snap;
@@ -443,6 +518,10 @@ class Api {
     } catch {
       return null;
     }
+  }
+  /** End the robot prep window now (no-op outside TRACKING), so the countdown follows the pose audio. */
+  async robotPrepDone(): Promise<void> {
+    await fetch(`${ROBOT_URL}/sequence/skip`, { method: 'POST', signal: AbortSignal.timeout(2000) }).catch(() => undefined);
   }
   async robotConfig(): Promise<RobotConfig | null> {
     return go<RobotConfig>('GET', '/api/robot/config', undefined, undefined, 3000).catch(() => null);
@@ -590,7 +669,7 @@ class Api {
     return this.templates.find((t) => t.id === s.templateId) ?? this.templates.find((t) => t.photoCount <= n) ?? this.templates[0];
   }
 
-  /** compose (canvas → Go) → print → QR to the Next.js download page. */
+  /** compose (canvas → Go) → print → QR to the Go session GIF endpoint. */
   private async render(t: PhotoTemplate) {
     const id = this.sessionId;
     const goId = this.goId;
@@ -602,7 +681,7 @@ class Api {
       const slots = [...s.slots].sort((a, b) => a.slotIndex - b.slotIndex);
       const photos = slots.map((x) => s.photos.find((p) => p.id === x.photoId));
       const edits = Object.fromEntries(slots.map((x) => [x.slotIndex, x.edit]));
-      const blob = await composeFrame(t, photos, edits);
+      const blob = await composeFrame(t, photos, edits, get().stickers);
       const form = new FormData();
       form.append('image', blob, 'strip.jpg');
       form.append('sessionId', goId);
@@ -614,16 +693,19 @@ class Api {
       if (!alive()) return;
       // Resolved alongside printing so the QR screen usually opens without waiting.
       links = galleryLinks(goId, composed?.preview_url);
-      this.emit({ status: 'PRINTING', print: { ...this.snap!.print!, status: 'PRINTING', progress: 30 } });
+      if (this.snap!.quantity > 0) this.emit({ status: 'PRINTING', print: { ...this.snap!.print!, status: 'PRINTING', progress: 30 } });
     } catch (e) {
       if (alive()) this.emit({ status: 'ERROR', print: { ...this.snap!.print!, status: 'FAILED', error: (e as Error).message, userMessage: 'Gagal menyimpan foto.' } });
       return;
     }
     try {
-      await go('POST', '/api/photo/print', { session_id: goId }, undefined, 60000);
+      // Digital only: backend prints print_count 0 as 1 copy, so never call it.
+      if (this.snap!.quantity > 0) await go('POST', '/api/photo/print', { session_id: goId }, undefined, 60000);
       if (!alive()) return;
-      this.emit({ status: 'PRINT_SUCCESS', print: { ...this.snap!.print!, status: 'COMPLETED', progress: 100 } });
-      await sleep(2500);
+      if (this.snap!.quantity > 0) {
+        this.emit({ status: 'PRINT_SUCCESS', print: { ...this.snap!.print!, status: 'COMPLETED', progress: 100 } });
+        await sleep(2500);
+      }
     } catch (e) {
       if (!alive()) return;
       const msg = (e as Error).message;

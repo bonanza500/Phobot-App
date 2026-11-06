@@ -1,23 +1,19 @@
 import { useEffect, useState } from 'react';
 import { UNPAID_STATES } from '@photobooth/shared';
 import { useBooth, set } from '../store';
-import { Bubble, Robot } from '../components/basics';
+import { Bubble, HaloRobot, Robot } from '../components/basics';
 import { dev, resetToWelcome } from '../flow';
 import { devMode } from '../kiosk';
 
 /** Maintenance screen (critical hardware down) — same visual identity. */
 export function Maintenance() {
   return (
-    <div className="scr en" style={{ alignItems: 'center', justifyContent: 'center', gap: 30, textAlign: 'center' }} data-testid="maintenance">
-      <svg style={{ position: 'absolute', right: -140, top: 40, opacity: 0.6 }} width="1000" height="1000" viewBox="0 0 100 100">
-        <circle cx="50" cy="50" r="48" fill="var(--lv)" />
-        <circle cx="50" cy="50" r="34" fill="var(--pk)" />
-        <circle cx="50" cy="50" r="20" fill="var(--pe)" />
-      </svg>
-      <div style={{ position: 'relative' }}>
-        <Robot m="think" s={300} />
-      </div>
-      <h1 style={{ position: 'relative', fontSize: 100 }}>Sebentar ya!</h1>
+    <div className="scr en booth-theme booth-center" style={{ alignItems: 'center', justifyContent: 'center', gap: 30, textAlign: 'center' }} data-testid="maintenance">
+      <div className="free-spark free-spark-one" aria-hidden="true">✦</div>
+      <div className="free-spark free-spark-two" aria-hidden="true">✧</div>
+      <HaloRobot m="think" s={300} />
+      <span className="free-eyebrow"><span>✦</span> PERAWATAN <span>✦</span></span>
+      <h1 style={{ fontSize: 100 }}>Sebentar <em>ya!</em></h1>
       <p className="p" style={{ position: 'relative', fontSize: 44, lineHeight: 1.3 }}>
         Robot sedang bersiap-siap.
         <br />
@@ -26,6 +22,7 @@ export function Maintenance() {
       <div className="chip" style={{ position: 'relative' }}>
         Hubungi petugas jika butuh bantuan
       </div>
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> SEGERA KEMBALI</footer>
     </div>
   );
 }
@@ -42,9 +39,10 @@ export function ErrorScreen() {
     return () => clearTimeout(t);
   }, [unpaid, resetAfter]);
   return (
-    <div className="scr en" style={{ alignItems: 'center', justifyContent: 'center', gap: 30, textAlign: 'center' }} data-testid="error-screen">
-      <Robot m="think" s={300} />
-      <h2>Ada kendala kecil</h2>
+    <div className="scr en booth-theme booth-center" style={{ alignItems: 'center', justifyContent: 'center', gap: 30, textAlign: 'center' }} data-testid="error-screen">
+      <HaloRobot m="think" s={300} />
+      <span className="free-eyebrow"><span>✦</span> TENANG, FOTOMU AMAN <span>✦</span></span>
+      <h2>Ada kendala <em>kecil</em></h2>
       <div style={{ width: 1100 }}>
         <Bubble small={session ? `Kode sesi: ${session.code} · fotomu tersimpan aman.` : undefined}>
           {clientError?.message ?? 'Petugas akan segera membantu. Mohon tunggu sebentar, ya.'}
@@ -55,6 +53,7 @@ export function ErrorScreen() {
           KEMBALI KE AWAL
         </button>
       ) : null}
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> BANTUAN PETUGAS</footer>
     </div>
   );
 }
@@ -68,30 +67,6 @@ export function ReconnectOverlay() {
         <Robot m="think" s={220} />
         <h2>Sebentar ya…</h2>
         <p className="p">Sistem sedang menyambung ulang. Fotomu tetap aman.</p>
-      </div>
-    </div>
-  );
-}
-
-export function IdleOverlay() {
-  const idle = useBooth((s) => s.idle);
-  if (!idle) return null;
-  const text =
-    idle.kind === 'unpaid'
-      ? 'Sesi akan dibatalkan dan kembali ke awal.'
-      : idle.kind === 'paid'
-        ? 'Tenang, robot akan memilihkan foto terbaik dan langsung mencetaknya.'
-        : 'Layar akan kembali ke awal.';
-  return (
-    <div className="ovl" data-testid="idle-warning">
-      <div className="card">
-        <Robot m="think" s={200} />
-        <h2>Masih di sana?</h2>
-        <div className="count">{idle.secondsLeft}</div>
-        <p className="p">{text}</p>
-        <button className="btn pr" onClick={() => set({ idle: null })} data-testid="idle-stay">
-          SAYA MASIH DI SINI
-        </button>
       </div>
     </div>
   );

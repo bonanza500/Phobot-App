@@ -23,19 +23,12 @@ export function Welcome() {
   };
 
   return (
-    <div className="scr en" style={{ justifyContent: 'center', paddingLeft: 150 }}>
-      <svg style={{ position: 'absolute', right: -140, top: 40 }} width="1000" height="1000" viewBox="0 0 100 100" aria-hidden="true">
-        <circle cx="50" cy="50" r="48" fill="var(--lv)" />
-        <circle cx="50" cy="50" r="34" fill="var(--pk)" />
-        <circle cx="50" cy="50" r="20" fill="var(--pe)" />
-      </svg>
       <div
-        id="wr"
-        ref={wr}
-        className={vanish ? 'wel-bot go' : 'wel-bot'}
+        className="scr en booth-theme booth-welcome"
+        style={{ justifyContent: 'center', paddingLeft: 150, paddingBottom: 90, cursor: 'pointer' }}
         role="button"
         tabIndex={0}
-        aria-label="Sentuh robot untuk mulai"
+        aria-label="Sentuh layar untuk mulai"
         aria-disabled={vanish}
         data-testid="start"
         onClick={ninja}
@@ -46,6 +39,20 @@ export function Welcome() {
           }
         }}
       >
+      <div className="free-spark free-spark-one" aria-hidden="true">✦</div>
+      <div className="free-spark free-spark-two" aria-hidden="true">✧</div>
+      <div className="wel-art" aria-hidden="true">
+        <div className="free-halo"><i /><i /><i /></div>
+        <div className="free-confetti confetti-a">✦</div>
+        <div className="free-confetti confetti-b">✧</div>
+        <div className="free-confetti confetti-c">●</div>
+        <div className="free-confetti confetti-d">✦</div>
+      </div>
+      <div
+        id="wr"
+        ref={wr}
+        className={vanish ? 'wel-bot go' : 'wel-bot'}
+      >
         <i className="wel-ring" />
         <i className="wel-ring" />
         <i className="wel-ring" />
@@ -55,31 +62,30 @@ export function Welcome() {
           </div>
         </div>
         <div className="wel-bubble">
-          <div>Sentuh aku!</div>
+          <div>Sentuh layar!</div>
         </div>
       </div>
       <div style={{ position: 'relative', maxWidth: 1000 }}>
-        <div className="chip b" style={{ marginBottom: 40, fontWeight: 500 }}>
-          {chip}
-        </div>
+        <div className="free-eyebrow"><span>✦</span> {chip} <span>✦</span></div>
         <h1>
           Robot
           <br />
-          Photobooth
+          <em>Photobooth</em>
         </h1>
-        <div style={{ marginTop: 56, display: 'flex', alignItems: 'center', gap: 20 }}>
-          <p style={{ margin: 0, fontSize: 50, fontWeight: 400, lineHeight: 1.15, color: 'var(--ink)', whiteSpace: 'nowrap' }}>
-            Sentuh robot
+        <div className="wel-cta">
+          <p>
+            Sentuh layar
             <br />
             untuk mulai foto
           </p>
           <div className="wel-arrows" aria-hidden="true">
-            <Icon n="next" z={84} c="var(--bl)" />
-            <Icon n="next" z={84} c="var(--bl)" />
-            <Icon n="next" z={84} c="var(--bl)" />
+            <Icon n="next" z={56} />
+            <Icon n="next" z={56} />
+            <Icon n="next" z={56} />
           </div>
         </div>
       </div>
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> FOTO · EDIT · CETAK · QR</footer>
     </div>
   );
 }

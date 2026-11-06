@@ -13,8 +13,10 @@ import {
   type PhotoTemplate,
   type SessionSnapshot,
 } from '@photobooth/shared';
+import type { Sticker } from './stickers';
+import { outputScreen } from './output-screen';
 
-export type CapturePhase = 'move' | 'prep' | 'cd' | 'shooting' | 'nice' | 'retry' | '';
+export type CapturePhase = 'move' | 'prep' | 'cd' | 'nice' | '';
 
 export interface HealthState {
   acceptingSessions: boolean;
@@ -24,6 +26,8 @@ export interface HealthState {
 
 export interface BoothState {
   booted: boolean;
+  screenPreview: string | null;
+  previewRows: { id: string; tab: string; script: string; tone: string; screenSeconds: number; uploaded: boolean; hasDefault: boolean }[];
   bootError: string | null;
   config: BoothConfig | null;
   health: HealthState | null;
@@ -44,18 +48,25 @@ export interface BoothState {
   tplId: string;
   picks: string[];
   edits: Record<number, EditParams>;
+  /** Decorations on the frame (edit screen); local only, burned into the composed image. */
+  stickers: Sticker[];
   slot: number;
-  capture: { angle: number; shot: number; phase: CapturePhase; message: string; cd?: number | 'cam' | 'snap' | null; cdKey?: number; flashKey?: number; shotUrl?: string | null; freeze?: boolean };
+  capture: { angle: number; shot: number; phase: CapturePhase; message: string; cd?: number | 'cam' | 'snap' | null; cdKey?: number; flashKey?: number; shotUrl?: string | null; freeze?: boolean; prepEnd?: number };
   readyCd: number;
+  /** Start value of the ready countdown (clip length), for the progress bar. */
+  readyTotal: number;
   big: string | null;
   busy: string | null;
   notice: string | null;
   clientError: { code: string; message: string } | null;
-  idle: { secondsLeft: number; total: number; kind: 'unpaid' | 'paid' | 'done' } | null;
+  /** On-screen page time limit (none on the ready/session screens). */
+  timer: { left: number; mode: 'limit' } | null;
 }
 
 export const useBooth = create<BoothState>(() => ({
   booted: false,
+  screenPreview: null,
+  previewRows: [],
   bootError: null,
   config: null,
   health: null,
@@ -71,14 +82,16 @@ export const useBooth = create<BoothState>(() => ({
   tplId: DEFAULT_TEMPLATE_ID,
   picks: [],
   edits: {},
+  stickers: [],
   slot: 0,
   capture: { angle: 0, shot: 0, phase: '', message: '' },
   readyCd: 5,
+  readyTotal: 5,
   big: null,
   busy: null,
   notice: null,
   clientError: null,
-  idle: null,
+  timer: null,
 }));
 
 export const set = useBooth.setState;
@@ -86,12 +99,13 @@ export const get = useBooth.getState;
 
 /** Which prototype screen to show. */
 export function currentScreen(s: BoothState, now = Date.now()): BoothScreen {
+  if (s.screenPreview) return (s.screenPreview === 'system' ? 'welcome' : s.screenPreview) as BoothScreen;
   if (s.clientError) return 'error';
   const sess = s.session;
   if (!sess) return 'welcome';
   if (s.entering) return 'welcome';
   if (now < s.holdPrintUntil) return 'print';
-  return screenForState(sess.status);
+  return outputScreen(sess.status, sess.quantity) ?? screenForState(sess.status);
 }
 
 export function templates(s: BoothState): PhotoTemplate[] {

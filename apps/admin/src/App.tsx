@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react';
 import { robotSvg } from '@photobooth/ui';
-import { get, post, setUnauthorizedHandler } from './api';
+import { get, getToken, post, setToken, setUnauthorizedHandler } from './api';
+import { Account } from './pages/Account';
+import { AudioPage } from './pages/Audio';
 import { Dashboard } from './pages/Dashboard';
-import { Sessions, SessionDetail } from './pages/Sessions';
-import { PrintQueue } from './pages/PrintQueue';
-import { Configuration } from './pages/Configuration';
-import { Diagnostics } from './pages/Diagnostics';
-import { Logs } from './pages/Logs';
+import { Devices } from './pages/Devices';
+import { Frames } from './pages/Frames';
+import { Packages } from './pages/Packages';
+import { Reports } from './pages/Reports';
+import { Robot } from './pages/Robot';
+import { Sessions } from './pages/Sessions';
+import { Settings } from './pages/Settings';
+import { Vouchers } from './pages/Vouchers';
 import { Toasts } from './ui';
 
 function useHashRoute() {
@@ -20,7 +25,7 @@ function useHashRoute() {
 }
 
 function Login({ onDone }: { onDone: (u: string) => void }) {
-  const [username, setU] = useState('admin');
+  const [email, setU] = useState('');
   const [password, setP] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -29,8 +34,9 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
     setBusy(true);
     setErr('');
     try {
-      const r = await post<{ username: string }>('/api/admin/login', { username, password });
-      onDone(r.username);
+      const r = await post<{ token: string; admin: { email: string } }>('/api/admin/login', { email, password });
+      setToken(r.token);
+      onDone(r.admin.email);
     } catch (ex) {
       setErr((ex as Error).message);
     } finally {
@@ -41,21 +47,21 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
     <div className="login">
       <form className="card" onSubmit={submit}>
         <div style={{ display: 'flex', justifyContent: 'center' }} dangerouslySetInnerHTML={{ __html: robotSvg('hi', 120) }} />
-        <h1 style={{ textAlign: 'center', margin: 0 }}>Admin Login</h1>
+        <h1 style={{ textAlign: 'center', margin: 0 }}>Masuk Admin</h1>
         <p className="mu" style={{ textAlign: 'center', margin: 0 }}>
-          Robot Photobooth control panel
+          Panel kontrol Robot Photobooth
         </p>
         <label className="f">
-          Username
-          <input value={username} onChange={(e) => setU(e.target.value)} autoComplete="username" data-testid="login-user" />
+          Email
+          <input type="email" value={email} onChange={(e) => setU(e.target.value)} autoComplete="username" required data-testid="login-user" />
         </label>
         <label className="f">
           Password
-          <input type="password" value={password} onChange={(e) => setP(e.target.value)} autoComplete="current-password" data-testid="login-pass" />
+          <input type="password" value={password} onChange={(e) => setP(e.target.value)} autoComplete="current-password" required data-testid="login-pass" />
         </label>
-        {err ? <div className="chip err">{err}</div> : null}
+        {err ? <div className="chip err" role="alert">{err}</div> : null}
         <button className="btn pr" disabled={busy} data-testid="login-submit">
-          {busy ? 'Signing in…' : 'Sign in'}
+          {busy ? 'Masuk…' : 'Masuk'}
         </button>
       </form>
     </div>
@@ -64,41 +70,77 @@ function Login({ onDone }: { onDone: (u: string) => void }) {
 
 const NAV: [string, string][] = [
   ['/', 'Dashboard'],
-  ['/sessions', 'Sessions'],
-  ['/print', 'Print queue'],
-  ['/config', 'Configuration'],
-  ['/diagnostics', 'Diagnostics'],
-  ['/logs', 'Logs'],
+  ['/laporan', 'Laporan'],
+  ['/sesi', 'Sesi'],
+  ['/paket', 'Paket'],
+  ['/frame', 'Frame'],
+  ['/voucher', 'Voucher'],
+  ['/audio', 'Audio'],
+  ['/robot', 'Robot'],
+  ['/pengaturan', 'Pengaturan'],
+  ['/perangkat', 'Perangkat'],
+  ['/akun', 'Akun'],
 ];
+
+function Page({ route, user }: { route: string; user: string }) {
+  const [, top, id] = route.split('/');
+  switch (top) {
+    case 'laporan':
+      return <Reports />;
+    case 'sesi':
+      return <Sessions id={id ? decodeURIComponent(id) : undefined} />;
+    case 'paket':
+      return <Packages />;
+    case 'frame':
+      return <Frames />;
+    case 'voucher':
+      return <Vouchers />;
+    case 'audio':
+      return <AudioPage />;
+    case 'robot':
+      return <Robot />;
+    case 'pengaturan':
+      return <Settings />;
+    case 'perangkat':
+      return <Devices />;
+    case 'akun':
+      return <Account email={user} />;
+    default:
+      return <Dashboard />;
+  }
+}
 
 export function App() {
   const route = useHashRoute();
   const [user, setUser] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    setUnauthorizedHandler(() => setUser(null));
-    get<{ authenticated: boolean; username: string | null }>('/api/admin/session')
-      .then((r) => setUser(r.authenticated ? r.username : null))
+    setUnauthorizedHandler(() => {
+      setToken(null);
+      setUser(null);
+    });
+    // Go has no session endpoint: a token that still opens a protected route is valid.
+    if (!getToken()) return setUser(null);
+    get('/api/admin/settings')
+      .then(() => setUser(localStorage.getItem('pb.admin.email') ?? 'admin'))
       .catch(() => setUser(null));
   }, []);
 
   if (user === undefined) return null;
-  if (!user) return <Login onDone={setUser} />;
+  if (!user)
+    return (
+      <Login
+        onDone={(u) => {
+          localStorage.setItem('pb.admin.email', u);
+          setUser(u);
+        }}
+      />
+    );
 
-  const logout = async () => {
-    await post('/api/admin/logout');
+  const logout = () => {
+    setToken(null);
     setUser(null);
   };
-
-  let page: JSX.Element;
-  const m = route.match(/^\/sessions\/([^/]+)$/);
-  if (m) page = <SessionDetail id={m[1]} />;
-  else if (route.startsWith('/sessions')) page = <Sessions />;
-  else if (route.startsWith('/print')) page = <PrintQueue />;
-  else if (route.startsWith('/config')) page = <Configuration />;
-  else if (route.startsWith('/diagnostics')) page = <Diagnostics />;
-  else if (route.startsWith('/logs')) page = <Logs />;
-  else page = <Dashboard />;
 
   return (
     <div className="layout">
@@ -118,14 +160,16 @@ export function App() {
         </nav>
         <div className="spacer" />
         <a className="small" href="/" target="_blank" rel="noreferrer">
-          Open booth ↗
+          Buka booth ↗
         </a>
-        <div className="small mu">Signed in as {user}</div>
+        <div className="small mu">Masuk sebagai {user}</div>
         <button className="btn" onClick={logout}>
-          Sign out
+          Keluar
         </button>
       </aside>
-      <main>{page}</main>
+      <main>
+        <Page key={route.split('/')[1]} route={route} user={user} />
+      </main>
       <Toasts />
     </div>
   );

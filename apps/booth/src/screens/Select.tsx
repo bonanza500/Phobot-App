@@ -3,8 +3,9 @@ import { computeFrameLayout, type PhotoTemplate } from '@photobooth/shared';
 import { currentTemplate, slotRatio, useBooth, useFlatPhotos } from '../store';
 import { fitGrid } from '../fitGrid';
 import { Frame } from '../components/Frame';
-import { Icon, Pic } from '../components/basics';
+import { Icon, Pic, Steps } from '../components/basics';
 import { autoPick, back, chooseTemplate, clearPicks, confirmPicks, confirmTemplate, togglePick } from '../flow';
+import { voice } from '../voice';
 
 /** prototype V.tpl */
 export function Tpl() {
@@ -27,6 +28,7 @@ export function Tpl() {
   const openGroup = (g: (typeof groups)[number]) => {
     if (cur?.photoCount !== g.n) chooseTemplate(g.items[0].id);
     setCount(g.n);
+    voice('tpl_group');
   };
   // Paid already: step 1 has nothing to go back to.
   const canBack = !!group && groups.length > 1;
@@ -65,17 +67,21 @@ export function Tpl() {
   const ellipsis = { width: '100%', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 } as const;
 
   return (
-    <div className="scr en" style={{ paddingTop: 40, paddingBottom: 36 }}>
-      <div className="top" style={{ height: 90, marginBottom: 20 }}>
+    <div className="scr en booth-theme" style={{ paddingTop: 40, paddingBottom: 60 }}>
+      <div className="top" style={{ marginBottom: 0 }}>
         <button className="btn sm" onClick={goBack} style={{ visibility: canBack ? 'visible' : 'hidden' }}>
           <Icon n="back" z={30} /> Kembali
         </button>
-        <div style={{ textAlign: 'center' }}>
-          <h2 style={{ fontSize: 52 }}>{group ? `Pilih frame ${group.n} foto` : 'Pilih tipe frame'}</h2>
-          <div className="p" style={{ fontSize: 28, marginTop: 4 }}>{group ? 'Ketuk desain favoritmu' : 'Mau berapa foto dalam satu frame?'}</div>
-        </div>
-        <div className="chip b">{group ? `${group.items.length} desain` : `${groups.length} tipe`}</div>
+        <Steps cur={1} />
       </div>
+      <header className="booth-hero">
+        <span className="free-eyebrow"><span>✦</span> PILIH GAYAMU <span>✦</span></span>
+        <h1>{group ? <>Pilih frame <em>{group.n} foto</em></> : <>Pilih <em>tipe frame</em></>}</h1>
+        <p className="p">
+          {group ? 'Ketuk desain favoritmu' : 'Mau berapa foto dalam satu frame?'}
+          <span className="chip b">{group ? `${group.items.length} desain` : `${groups.length} tipe`}</span>
+        </p>
+      </header>
       <div
         ref={box}
         style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: `repeat(${g.cols}, auto)`, gap: GAP, justifyContent: 'center', alignContent: g.scroll ? 'start' : 'center', overflowX: 'hidden', overflowY: g.scroll ? 'auto' : 'hidden' }}
@@ -92,7 +98,7 @@ export function Tpl() {
                     data-sel={sel ? '' : undefined}
                     data-testid={`tpl-${t.id}`}
                     onClick={() => chooseTemplate(t.id)}
-                    style={{ ...card, border: `${CARD_BORDER}px solid ${sel ? 'var(--bl)' : 'transparent'}` }}
+                    style={{ ...card, border: `${CARD_BORDER}px solid ${sel ? '#f05b9b' : 'transparent'}` }}
                   >
                     {preview(t)}
                     <div style={{ ...ellipsis, fontSize: 28, fontWeight: 600 }}>{t.name}</div>
@@ -112,7 +118,7 @@ export function Tpl() {
                     data-sel={sel ? '' : undefined}
                     data-testid={`tpl-type-${gr.n}`}
                     onClick={() => openGroup(gr)}
-                    style={{ ...card, border: `${CARD_BORDER}px solid ${sel ? 'var(--bl)' : 'transparent'}` }}
+                    style={{ ...card, border: `${CARD_BORDER}px solid ${sel ? '#f05b9b' : 'transparent'}` }}
                   >
                     {preview(gr.items[0])}
                     <div style={{ ...ellipsis, fontSize: 40, fontWeight: 700 }}>{gr.n} Foto</div>
@@ -133,6 +139,7 @@ export function Tpl() {
           </button>
         </div>
       )}
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> PILIH FRAME</footer>
     </div>
   );
 }
@@ -185,24 +192,24 @@ export function Pick() {
   const frameW = Math.min(computeFrameLayout(t, frameH).width, 620);
 
   return (
-    <div className="scr en">
-      <div className="top">
+    <div className="scr en booth-theme" style={{ paddingTop: 40, paddingBottom: 56 }}>
+      <div className="top" style={{ marginBottom: 0 }}>
         <button className={`btn sm ${busy === 'back' ? 'wait' : ''}`} onClick={back}>
           <Icon n="back" z={30} />
           Kembali
         </button>
-        <div className={`chip ${k == n ? 'y' : 'b'}`} data-testid="pick-count">
-          ✓ {k} / {n} foto
-        </div>
+        <Steps cur={2} />
       </div>
+      <header className="booth-hero sm">
+        <span className="free-eyebrow"><span>✦</span> ISI FRAME-MU <span>✦</span></span>
+        <h1>Pilih foto untuk <em>dicetak</em></h1>
+        <p className="p">
+          Ketuk {n} foto favoritmu. Urutannya mengikuti posisi di frame.
+          <span className={`chip ${k == n ? 'y' : 'b'}`} data-testid="pick-count">✓ {k} / {n} foto</span>
+        </p>
+      </header>
       <div className="row" style={{ gap: 56, minHeight: 0 }}>
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 20, minHeight: 0 }}>
-          <div>
-            <h2>Pilih foto untuk dicetak</h2>
-            <p className="p" style={{ fontSize: 32, marginTop: 6 }}>
-              Ketuk {n} foto favoritmu. Urutannya mengikuti posisi di frame.
-            </p>
-          </div>
+        <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: 24, borderRadius: 36 }} data-avoid>
           <div
             ref={grid}
             style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: `repeat(${fit.cols}, auto)`, gap: PG, justifyContent: 'center', alignContent: fit.scroll ? 'start' : 'center', overflowX: 'hidden', overflowY: fit.scroll ? 'auto' : 'hidden' }}
@@ -236,6 +243,7 @@ export function Pick() {
           LANJUT <Icon n="next" z={36} />
         </button>
       </div>
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> {t.name}</footer>
     </div>
   );
 }

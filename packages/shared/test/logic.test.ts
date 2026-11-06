@@ -3,7 +3,7 @@ import { clampQuantity, priceFor, rp, DEFAULT_PRICING } from '../src/pricing';
 import { DEFAULT_TEMPLATES, findTemplate, templatesSchema } from '../src/templates';
 import { computeFrameLayout, computePageLayout } from '../src/layout';
 import { activePhotos, autoPick, randomPick, canRetake, capturePlan, chooseForAngle, nextMissingStep, retakesLeft, togglePick } from '../src/selection';
-import { applyDrag, applyEditOp, applyPinch, applyWheel, cssTransform, defaultEdit, visibleCrop } from '../src/edit';
+import { applyDrag, applyEditOp, applyPinch, applyWheel, cssTransform, defaultEdit, fitEdit, restoreIfUncovered, visibleCrop } from '../src/edit';
 import { applyColorMatrix, cssFilterToMatrix, editColorMatrix, isIdentity } from '../src/filters';
 import { sessionTip, tipFor, TIPS } from '../src/poses';
 import { DEFAULT_SETTINGS, mergeSettings } from '../src/config';
@@ -160,6 +160,16 @@ describe('edit transforms', () => {
     expect(p.rotation).toBe(30);
     expect(applyPinch(defaultEdit(), 0.1, 0, 0, 0, 1, 1).zoom).toBe(0.6);
     expect(applyWheel(defaultEdit(), -200).zoom).toBeGreaterThan(1);
+  });
+  it('fitEdit keeps the photo covering the slot', () => {
+    const f = fitEdit({ ...defaultEdit(), x: 0.4, y: -0.3 });
+    expect([f.zoom, Math.abs(f.x), Math.abs(f.y)]).toEqual([1, 0, 0]);
+    expect(fitEdit({ ...defaultEdit(), zoom: 0.7, rotation: 30 })).toMatchObject({ zoom: 1, rotation: 0 });
+    expect(fitEdit({ ...defaultEdit(), zoom: 2, x: 0.9, y: -0.2 })).toMatchObject({ zoom: 2, x: 0.5, y: -0.2 });
+  });
+  it('restores original crop when a photo drag leaves its frame uncovered', () => {
+    expect(restoreIfUncovered({ ...defaultEdit(), x: 0.1 })).toEqual(defaultEdit());
+    expect(restoreIfUncovered({ ...defaultEdit(), zoom: 2, x: 0.2 })).toMatchObject({ zoom: 2, x: 0.2 });
   });
   it('produces the same CSS transform order as the prototype', () => {
     const t = cssTransform({ ...defaultEdit(), x: 0.1, y: -0.2, rotation: 15, zoom: 1.5, flipHorizontal: true }, 200, 100);

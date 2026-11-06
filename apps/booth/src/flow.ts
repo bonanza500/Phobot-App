@@ -10,6 +10,7 @@ import {
   isTerminal,
   nextMissingStep,
   p2,
+  sessionTip,
   togglePick as togglePickIds,
   type EditOp,
   type EditParams,
@@ -20,7 +21,17 @@ import {
 import { api, ApiError, NetworkError, newRequestId, onConnectivity } from './api/client';
 import { getCamera, cameraInstance } from './camera/service';
 import { robot } from './robot/floating';
+import { clipSeconds, loadAudioUploads, paymentQrCue, voice } from './voice';
+import { canSwitchMode, freeModeOutdated, modeChanged, qtyAfterModeSwitch } from './payment-mode';
+import { MAX_STICKERS, type Sticker } from './stickers';
 import { currentScreen, currentTemplate, flatPhotos, get, plan, scaleMs, set, type BoothState } from './store';
+import { timeoutAction } from './timeout-flow';
+
+/** How often the booth checks whether admin switched between free and paid mode. */
+export const MODE_POLL_MS = 3000;
+
+/** How long the paid ticket stays up before the session begins. */
+export const PAID_HOLD_MS = 4000;
 
 /* ------------------------------------------------------------------ abort token (prototype `tok`) */
 
@@ -60,6 +71,16 @@ let beginScheduled = false;
 /* ------------------------------------------------------------------ boot & recovery */
 
 export async function boot() {
+  const previewTab = new URLSearchParams(location.search).get('preview');
+  let previewRows: { id: string; tab: string; script: string; tone: string; screenSeconds: number; uploaded: boolean; hasDefault: boolean }[] = [];
+  if (previewTab) {
+    try {
+      previewRows = await (await fetch('/api/audio/scripts')).json();
+    } catch {
+      previewRows = [];
+    }
+  }
+  void loadAudioUploads();
   for (let attempt = 0; ; attempt++) {
     try {
       const config = await api.config();
@@ -71,6 +92,17 @@ export async function boot() {
     }
   }
   const config = get().config!;
+  if (previewTab) {
+    set({
+      session: null,
+      bootError: null,
+      screenPreview: previewTab,
+      previewRows,
+      config: { ...config, pricing: { ...config.pricing, firstPrint: 1 } },
+      booted: true,
+    } as Partial<BoothState>);
+    return;
+  }
   const cam = getCamera(config.camera);
   cam.onStatus((st) => set({ cameraState: st.state, cameraError: st.lastError ?? null }));
   if (config.camera.mode === 'browser') void cam.start().catch(() => undefined);
@@ -92,6 +124,7 @@ export async function boot() {
   }, 15000);
   setInterval(() => void heartbeat(), 10000);
   void heartbeat();
+  setInterval(() => void syncMode(), MODE_POLL_MS);
 }
 
 export async function refreshHealth() {
@@ -193,7 +226,7 @@ function onEnterState(prevStatus: SessionState | null, next: SessionSnapshot, pa
         setTimeout(() => {
           beginScheduled = false;
           if (t === tok) beginAfterPayment();
-        }, scaleMs(2800));
+        }, scaleMs(PAID_HOLD_MS));
       }
       break;
     case 'READY':
@@ -279,6 +312,7 @@ async function guard(name: string, fn: () => Promise<unknown>) {
     if (isAbort(e)) return;
     const msg = (e as ApiError).userMessage ?? (e instanceof NetworkError ? e.userMessage : 'Terjadi kendala. Coba lagi, ya.');
     robot.say(msg, 2600);
+    voice('err_general');
     set({ notice: msg });
     setTimeout(() => get().notice === msg && set({ notice: null }), 4000);
   } finally {
@@ -289,11 +323,38 @@ async function guard(name: string, fn: () => Promise<unknown>) {
 /* ------------------------------------------------------------------ welcome & payment */
 
 let payTimer: ReturnType<typeof setTimeout> | undefined;
+/** payBusy stays on until the first request of a session, so it cannot tell whether one is running. */
+let paymentRequests = 0;
+let modeSyncing = false;
+
+const mayPickUpMode = () => canSwitchMode(get().session?.status, paymentRequests > 0 || !!get().busy);
+
+/** Apply a mode switch from admin as soon as the customer is somewhere it is safe to do so. */
+export async function syncMode() {
+  if (modeSyncing || !mayPickUpMode()) return;
+  modeSyncing = true;
+  try {
+    const mode = await api.mode();
+    if (!modeChanged(get().config, mode) || !mayPickUpMode()) return;
+    const config = await api.config();
+    // config() falls back to paid defaults if /api/config fails: never switch on that.
+    if (modeChanged(config, mode) || !mayPickUpMode()) return;
+    const s = get();
+    set({ config: { ...config, timingScale: s.config?.timingScale ?? config.timingScale }, qty: qtyAfterModeSwitch(s.config, config, s.qty), payError: null });
+  } catch {
+    /* backend unreachable: the next tick tries again */
+  } finally {
+    modeSyncing = false;
+  }
+}
 
 export async function startSession() {
   const s = get();
   if (s.entering || s.session) return;
-  set({ entering: true, qty: 1, payError: null, payBusy: true });
+  set({ entering: true, qty: s.config?.freeDigitalOnly ? 0 : 1, payError: null, payBusy: true });
+  voice('welcome_start');
+  // Admin may have swapped clips since boot; the rest of the session uses the new list.
+  void loadAudioUploads();
   const t = tok;
   const anim = new Promise((r) => setTimeout(r, 1900));
   try {
@@ -302,7 +363,6 @@ export async function startSession() {
     saveSession();
     subscribe();
     applySnapshot(r.session);
-    void requestPayment(1);
   } catch (e) {
     await anim;
     set({ entering: false, payBusy: false, session: null });
@@ -316,11 +376,23 @@ export async function startSession() {
 }
 
 async function requestPayment(q: number) {
+  paymentRequests++;
   set({ payBusy: true, payError: null });
   try {
     const st = get().session?.status;
     if (st === 'PAYMENT_FAILED') await send({ type: 'retry_payment' });
     const snap = await api.payment(q);
+    if (freeModeOutdated(get().config, snap.status)) {
+      applySnapshot(api.abandonPayment());
+      set({ payBusy: false, payError: 'Pengaturan harga baru saja berubah. Coba lagi, ya.' });
+      voice('pay_busy');
+      // New config moves the customer off the free page when Free Mode really is off.
+      void api
+        .config()
+        .then((config) => get().session && set({ config: { ...config, timingScale: get().config?.timingScale ?? config.timingScale } }))
+        .catch(() => undefined);
+      return;
+    }
     applySnapshot(snap);
     if (get().qty === q) set({ payBusy: false });
   } catch (e) {
@@ -330,6 +402,9 @@ async function requestPayment(q: number) {
       return;
     }
     set({ payBusy: false, payError: (e as ApiError).userMessage ?? 'Layanan pembayaran sedang sibuk. Coba lagi sebentar lagi.' });
+    voice('pay_busy');
+  } finally {
+    paymentRequests--;
   }
 }
 
@@ -337,15 +412,72 @@ async function requestPayment(q: number) {
 export function setQty(delta: number) {
   const s = get();
   const max = s.config?.pricing.maxQuantity ?? 10;
-  const q = clampQuantity(s.qty + delta, { ...s.config!.pricing, maxQuantity: max });
+  pickQty(clampQuantity(s.qty + delta, { ...s.config!.pricing, maxQuantity: max }));
+}
+
+/** qty 0 = digital only (no print). */
+export const setDigital = (on: boolean) => {
+  const wasDigital = get().qty === 0;
+  pickQty(on ? 0 : 1);
+  if (wasDigital !== on) voice(on ? 'pay_digital' : 'pay_print');
+};
+
+function pickQty(q: number) {
+  const s = get();
   if (q === s.qty) return;
   set({ qty: q, payError: null, payBusy: true });
   clearTimeout(payTimer);
-  payTimer = setTimeout(() => void requestPayment(get().qty), 650);
+  if (s.session?.payment || s.session?.status === 'WAITING_PAYMENT') payTimer = setTimeout(() => void requestPayment(get().qty), 650);
 }
+
+export function selectQrPayment() {
+  if (get().session?.status !== 'PAYMENT_SUCCESS') {
+    const cue = paymentQrCue(get().config?.freeMode === true);
+    if (cue) voice(cue);
+    void requestPayment(get().qty);
+  }
+}
+
+export const voucherAudioCue = (outcome: 'invalid' | 'partial' | 'free') =>
+  ({ invalid: 'voucher_error', partial: 'voucher_partial', free: 'voucher_free' })[outcome];
+
+export const announceVoucherEntry = () => voice('voucher_show');
+export const announcePaymentMethods = () => voice('pay_method');
 
 export function retryPayment() {
   void guard('retry-pay', () => requestPayment(get().qty));
+}
+
+/** User-facing voucher error: network vs server vs rejected code. */
+export function voucherErrorMessage(e: unknown): string {
+  if (e instanceof NetworkError) return 'Koneksi terputus. Periksa jaringan lalu coba lagi.';
+  if (e instanceof ApiError) {
+    if (e.status >= 500) return 'Server sedang bermasalah. Coba lagi sebentar.';
+    return e.userMessage || e.message || 'Kode voucher tidak ditemukan.';
+  }
+  return 'Voucher gagal digunakan. Coba lagi.';
+}
+
+export async function applyFreeVoucher(code: string): Promise<string | null> {
+  if (get().busy || get().session?.status === 'PAYMENT_SUCCESS') return 'Pembayaran sudah selesai.';
+  set({ busy: 'voucher', payBusy: true, payError: null });
+  try {
+    const oldSession = get().session?.id;
+    const snapshot = await api.applyFreeVoucher(code, get().qty);
+    applySnapshot(snapshot);
+    if (get().session?.status === 'WAITING_PAYMENT') {
+      set({ payBusy: false });
+      voice(voucherAudioCue('partial'));
+    } else if (oldSession && get().session?.status === 'PAYMENT_SUCCESS') {
+      voice(voucherAudioCue('free'));
+    }
+    return null;
+  } catch (e) {
+    voice(voucherAudioCue('invalid'));
+    return voucherErrorMessage(e);
+  } finally {
+    set({ busy: null, payBusy: false });
+  }
 }
 
 export async function simulateMockPayment() {
@@ -385,6 +517,18 @@ function setCapture(p: Partial<BoothState['capture']>) {
   set({ capture: { ...get().capture, ...p } });
 }
 
+/** Bubble after each shot; voice clip is `sess_nice_<index+1>` (≤2s, the bubble shows 2s). */
+const NICE = [
+  'Bagus banget!',
+  'Keren abis!',
+  'Nice!',
+  'Mantul!',
+  'Gaya kamu oke!',
+  'Fotogenik banget!',
+  'Posenya pas banget!',
+  'Senyumnya juara!',
+];
+
 async function runSession(retakeAngle: number | null) {
   if (captureRunning) return;
   captureRunning = true;
@@ -393,10 +537,13 @@ async function runSession(retakeAngle: number | null) {
   try {
     if (retakeAngle === null) {
       // READY: "Mulai dalam N detik"
-      const total = get().session?.plan.readySeconds ?? cfg.session.readySeconds;
+      // Real seconds, as many as the countdown clip lasts; admin value only when the clip is missing.
+      const clip = await clipSeconds('countdown');
+      const total = clip > 0 ? Math.ceil(clip) : (get().session?.plan.readySeconds ?? cfg.session.readySeconds);
+      set({ readyCd: total, readyTotal: total });
       for (let cd = total; cd > 0; cd--) {
         set({ readyCd: cd });
-        await wait(900, t);
+        await wait(1000, t);
       }
     }
     await runCapture(t, retakeAngle);
@@ -419,6 +566,7 @@ async function runSession(retakeAngle: number | null) {
 async function runCapture(t: number, retakeAngle: number | null) {
   if (retakeAngle === null) await sendResilient({ type: 'move', angle: 0 }, 30000);
   const started = Date.now();
+  // No on-screen timer: the session runs until all angles are shot. This cap only rescues a stuck robot.
   // A retake shoots one pose; cap it well below the full-session limit.
   const limitMs = retakeAngle === null ? api.captureLimitMs : 120000;
   let seenActive = false;
@@ -433,6 +581,8 @@ async function runCapture(t: number, retakeAngle: number | null) {
   let firedKey: number | null = null;
   /** When "Jepret!" showed; non-null until the photo arrives (or gives up). */
   let snapAt: number | null = null;
+  /** Last "nice" line shown, so the next shot never repeats it. */
+  let nice = -1;
   const ticker = setInterval(() => {
     if (shutterAt === null || t !== tok) return;
     const left = shutterAt - Date.now();
@@ -445,6 +595,8 @@ async function runCapture(t: number, retakeAngle: number | null) {
       setCapture({ phase: 'cd', freeze: true });
       cd('snap');
       flash();
+      const s = get().session;
+      voice('snap_' + sessionTip(s?.id ?? '', angle, 0, s?.plan.shotsPerAngle ?? 2)[3], true);
       return;
     }
     const digit = left > 2000 ? 3 : left > 1000 ? 2 : 1;
@@ -452,6 +604,7 @@ async function runCapture(t: number, retakeAngle: number | null) {
       lastCd = digit;
       setCapture({ phase: 'cd' });
       cd(digit);
+      voice(['satu', 'dua', 'tiga'][digit - 1], digit !== 3);
     }
   }, 50);
   try {
@@ -478,13 +631,16 @@ async function runCapture(t: number, retakeAngle: number | null) {
         shutterAt = null;
         lastCd = null;
         const last = get().session!.photos.at(-1)!;
-        const msg = retakeAngle !== null ? 'Foto baru tersimpan!' : new Set(get().session!.photos.map((p) => p.angle)).size < total ? 'Bagus banget!' : 'Mantap! Semua angle selesai.';
-        // Frozen frame stays up while the real photo decodes, so the swap has no blank gap.
-        await preload(last.previewUrl, 3000);
-        if (t !== tok) throw new Aborted();
+        const doneAngles = new Set(get().session!.photos.map((p) => p.angle)).size;
+        const more = retakeAngle === null && doneAngles < total;
+        if (more) nice = (nice + 1 + Math.floor(Math.random() * (NICE.length - 1))) % NICE.length;
+        const msg = retakeAngle !== null ? 'Foto baru tersimpan!' : more ? NICE[nice] : 'Mantap! Semua angle selesai.';
         snapAt = null;
-        setCapture({ angle, phase: 'nice', cd: null, message: msg, shotUrl: last.previewUrl, freeze: false });
-        await wait(2000, t);
+        // "Nice" shows at once over the frozen frame; the real photo swaps in once decoded (no blank gap).
+        setCapture({ angle, phase: 'nice', cd: null, message: msg });
+        voice(retakeAngle !== null ? 'sess_retake_ok' : more ? `sess_nice_${nice + 1}` : 'sess_done');
+        await Promise.all([preload(last.previewUrl, 3000).then(() => t === tok && setCapture({ shotUrl: last.previewUrl, freeze: false })), wait(2000, t)]);
+        if (t !== tok) throw new Aborted();
         setCapture({ shotUrl: null });
         continue;
       }
@@ -495,6 +651,7 @@ async function runCapture(t: number, retakeAngle: number | null) {
       }
 
       const done =
+        det?.session_stopped ||
         (seenActive && (seq?.complete || fsm === 'DONE')) ||
         (!det && (retakeAngle === null ? n >= total : n > count0)) ||
         Date.now() - started > limitMs;
@@ -513,7 +670,10 @@ async function runCapture(t: number, retakeAngle: number | null) {
         shutterAt = Date.now() + leftMs;
         lastCd = null;
       }
-      if (shutterAt === null && snapAt === null) setCapture({ angle, phase: fsm === 'TRACKING' || fsm === 'CAPTURING' || rc?.auto_capture_active ? 'prep' : 'move', cd: null });
+      if (shutterAt === null && snapAt === null) {
+        const prepEnd = fsm === 'TRACKING' && seq ? Date.now() + seq.seconds_left * 1000 : 0;
+        setCapture({ angle, phase: fsm === 'TRACKING' || fsm === 'CAPTURING' || rc?.auto_capture_active ? 'prep' : 'move', cd: null, prepEnd });
+      }
     }
   } finally {
     clearInterval(ticker);
@@ -557,15 +717,19 @@ export function tapReviewPhoto(angle: number, id: string) {
   set({ session: { ...sess, photos: sess.photos.map((x) => (x.angle === angle ? { ...x, selected: next.includes(x.id), superseded: !next.includes(x.id) } : x)) } });
   void send({ type: 'select_angle', angle, photoIds: next }).catch(() => resync());
   robot.react('thumbs', 'wob', 'Pilihan bagus!', null, 1.2);
+  voice('pick_add');
 }
 
 export function retake(angle: number) {
+  voice('review_retake');
   robot.rbNav(`Ulang angle ${p2(angle + 1)}`, 'cam', () => void guard('retake', () => send({ type: 'retake', angle })));
 }
 
+/** "Selesai": end the robot sequence early once the frame's slots can be filled. */
 export function skipSession() {
   captureRunning = false;
   tok++;
+  voice('sess_skip');
   robot.rbNav('Selesai!', 'cheer', () => {
     if (get().busy) return;
     void send({ type: 'skip_angles' });
@@ -573,6 +737,7 @@ export function skipSession() {
 }
 
 export function toFrames() {
+  voice('review_ok');
   robot.rbNav('Pilih fotonya, yuk!', 'point', () => void guard('frames', () => send({ type: 'choose_frame' })));
 }
 
@@ -589,7 +754,7 @@ export function chooseTemplate(id: string) {
   const s = get();
   const t = s.config?.templates.find((x) => x.id === id);
   if (!t) return;
-  set({ tplId: id, picks: [], edits: {} });
+  set({ tplId: id, picks: [], edits: {}, stickers: [] });
   void send({ type: 'set_template', templateId: id }).catch(() => undefined);
   const r = t.reaction;
   if (r) robot.react(r.pose, r.anim, r.text, r.fx, 1.7);
@@ -610,22 +775,26 @@ export function togglePick(id: string) {
   if (!added) robot.react('think', null, 'Batal? Oke', '', 1.2);
   else if (picks.length == n) robot.react('cheer', 'hop', 'Lengkap! Lanjut, yuk', 'star', 1.8);
   else robot.react('thumbs', 'wob', 'Angle ' + angle + ', bagus!', '', 1.2);
+  voice(!added ? 'pick_remove' : picks.length == n ? 'pick_full' : 'pick_add');
 }
 
 export function autoPick() {
   const s = get();
   set({ picks: randomPick(flatPhotos(s), currentTemplate(s).photoCount) });
   robot.react('free', 'dance', 'Dipilihkan!', 'star', 1.6);
+  voice('pick_auto');
 }
 
 export function clearPicks() {
   set({ picks: [] });
   robot.react('shock', 'shake', 'Kosong lagi!', null, 1.2);
+  voice('pick_clear');
 }
 
 export function confirmPicks() {
   const s = get();
   if (s.picks.length !== currentTemplate(s).photoCount) return;
+  voice('pick_ok');
   robot.rbNav('Saatnya edit!', 'point', () => void guard('photos', () => send({ type: 'photos', photoIds: get().picks })));
 }
 
@@ -656,6 +825,27 @@ async function flushEdits() {
   if (slots.length) await api.command({ type: 'edits', slots }, { retries: 2 }).catch(() => undefined);
 }
 
+export function addSticker(k: string) {
+  const list = get().stickers;
+  if (list.length >= MAX_STICKERS) {
+    robot.say('Stikernya sudah penuh', 1400);
+    return null;
+  }
+  const o = ((list.length % 5) - 2) * 0.06;
+  const st: Sticker = { id: Date.now(), k, x: 0.5 + o, y: 0.45 + o, s: 0.24 };
+  set({ stickers: [...list, st] });
+  robot.react('cheer', 'hop', 'Lucu!', null, 1.1);
+  return st.id;
+}
+
+export function updateSticker(id: number, p: Partial<Sticker>) {
+  set({ stickers: get().stickers.map((s) => (s.id === id ? { ...s, ...p } : s)) });
+}
+
+export function removeSticker(id: number) {
+  set({ stickers: get().stickers.filter((s) => s.id !== id) });
+}
+
 export function editOp(op: EditOp) {
   const s = get();
   const e = applyEditOp(editOf(s.slot), op);
@@ -670,9 +860,12 @@ export function editOp(op: EditOp) {
   };
   const r = rx[op.op];
   if (r) robot.react(r[0], r[1], r[2], op.op === 'filter' ? 'heart' : null, 1.3);
+  // ponytail: no clips yet for brightness (edit_bright_up/down); add them to public/audio then map here.
+  if (op.op !== 'brightness') voice(op.op === 'filter' ? 'flt_' + op.filter : op.op === 'rotate90' ? 'edit_rotate' : 'edit_' + op.op);
 }
 
 export function editDone() {
+  voice('edit_ok');
   robot.rbNav('Hampir selesai!', 'cheer', () =>
     void guard('edit_done', async () => {
       clearTimeout(editTimer);
@@ -685,7 +878,8 @@ export function editDone() {
 /* ------------------------------------------------------------------ final / print / qr / thanks */
 
 export function confirmPrint() {
-  robot.rbNav('Siap cetak!', 'cheer', () => void guard('confirm', () => send({ type: 'confirm' })));
+  voice('final_ok');
+  robot.rbNav(get().session?.quantity ? 'Siap cetak!' : 'Siap simpan!', 'cheer', () => void guard('confirm', () => send({ type: 'confirm' })));
 }
 
 export function finish() {
@@ -695,16 +889,24 @@ export function finish() {
 /** Timeout handling per screen (unpaid → cancel, paid → auto-complete, done → finish). */
 export function onIdleTimeout() {
   const s = get();
+  if (s.screenPreview) return;
   const st = s.session?.status;
   if (!st) return;
   if (st === 'SELECT_PRINT' || st === 'WAITING_PAYMENT' || st === 'PAYMENT_FAILED') return backFromPay();
-  if (st === 'FRAME_SELECTION') return confirmTemplate();
-  if (['REVIEW', 'PHOTO_SELECTION', 'EDITING'].includes(st))
-    return void guard('auto', async () => {
-      await flushEdits();
-      await send({ type: 'auto_complete' });
-    });
-  if (st === 'FINAL_PREVIEW') return void guard('auto', () => send({ type: 'confirm' }));
+  switch (timeoutAction(st)) {
+    case 'choose-frame': return toFrames();
+    case 'confirm-frame': return confirmTemplate();
+    case 'auto-pick':
+      autoPick();
+      return confirmPicks();
+    case 'finish-edit': return editDone();
+    case 'confirm-output': return void guard('auto', () => send({ type: 'confirm' }));
+    case 'auto-complete':
+      return void guard('auto', async () => {
+        await flushEdits();
+        await send({ type: 'auto_complete' });
+      });
+  }
   if (st === 'QR_READY') return finish();
   if (st === 'FINISHED' || st === 'ERROR') return resetToWelcome();
 }
@@ -730,16 +932,22 @@ export function resetToWelcome() {
     tplId: DEFAULT_TEMPLATE_ID,
     picks: [],
     edits: {},
+    stickers: [],
     slot: 0,
     capture: { angle: 0, shot: 0, phase: '', message: '' },
     big: null,
     busy: null,
     notice: null,
     clientError: null,
-    idle: null,
+    timer: null,
     readyCd: get().config?.session.readySeconds ?? 5,
   });
   void refreshHealth();
+  // Pick up admin changes (free mode, prices, voucher chip) for the next session.
+  void api
+    .config()
+    .then((config) => !get().session && set({ config: { ...config, timingScale: get().config?.timingScale ?? config.timingScale } }))
+    .catch(() => undefined);
 }
 
 export function closeLightbox() {

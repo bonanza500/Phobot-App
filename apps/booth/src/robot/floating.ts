@@ -1,5 +1,6 @@
 import { posedRobotSvg, robotSvg, GLYPHS } from '@photobooth/ui';
 import type { BoothScreen } from '@photobooth/shared';
+import { voice } from '../voice';
 
 /**
  * The floating robot mascot (#rob) — a direct port of the prototype's
@@ -9,10 +10,10 @@ import type { BoothScreen } from '@photobooth/shared';
  *  - safe zones: idle targets avoid buttons / photos / the editor frame
  *  - taps on the robot that land over an interactive element are forwarded to it,
  *    so the mascot can never block the customer
- *  - screens where the robot must stay away (QR, payment, print) simply hide it
+ *  - capture/QR/print screens keep robot out of camera, QR, and output areas
  */
 
-export const FLY: BoothScreen[] = ['ready', 'session', 'review', 'tpl', 'pick', 'edit', 'final'];
+export const FLY: BoothScreen[] = ['ready', 'session', 'review', 'tpl', 'pick', 'edit', 'final', 'pay'];
 const POOL = ['wave', 'grin', 'peace', 'cheer', 'thumbs', 'heart', 'free', 'hop', 'cool'];
 const LINES: Partial<Record<BoothScreen, string>> = {
   ready: 'Siap difoto?',
@@ -22,6 +23,7 @@ const LINES: Partial<Record<BoothScreen, string>> = {
   pick: 'Pilih yang kamu suka!',
   edit: 'Coba cubit fotonya!',
   final: 'Tinggal cetak!',
+  pay: 'Pilih paketmu!',
 };
 type Fx = 'heart' | 'star' | null | '' | undefined;
 const RESP: { pose: string; an: string; t: () => string; fx?: Fx }[] = [
@@ -33,7 +35,30 @@ const RESP: { pose: string; an: string; t: () => string; fx?: Fx }[] = [
   { pose: 'peace', an: 'wob', t: () => 'Cekrek! Peace!' },
 ];
 
-const INTERACTIVE = 'button,.btn,.th,[data-tap],.slot,input';
+const INTERACTIVE = 'button,.btn,.th,[data-tap],.slot,input,.pay-qr,.pay-method,.pay-wallets,.voucher-panel,.pay-select-footer';
+const DRAG_PX = 12;
+const MAX_FLING = 3000;
+
+type Pt = { x: number; y: number; t: number };
+
+/** Reflect position p off the walls [0, max]; each hit keeps 70% of the speed. */
+export function bounce(p: number, v: number, max: number): [number, number] {
+  if (p < 0) return [Math.min(max, -p), -v * 0.7];
+  if (p > max) return [Math.max(0, 2 * max - p), -v * 0.7];
+  return [p, v];
+}
+
+/** Release velocity (px/s) from the last ~80ms of drag samples, capped at MAX_FLING. */
+export function flingVelocity(h: Pt[]): [number, number] {
+  const b = h[h.length - 1];
+  const a = h.find((p) => b.t - p.t <= 80) ?? b;
+  const dt = (b.t - a.t) / 1000;
+  if (dt < 0.01) return [0, 0];
+  const vx = (b.x - a.x) / dt;
+  const vy = (b.y - a.y) / dt;
+  const k = Math.min(1, MAX_FLING / (Math.hypot(vx, vy) || 1));
+  return [vx * k, vy * k];
+}
 
 class FloatingRobot {
   screen: BoothScreen = 'welcome';
@@ -46,22 +71,31 @@ class FloatingRobot {
   private to: ReturnType<typeof setTimeout> | undefined;
   private F = {
     x: 500, y: 300, vx: 0, vy: 0, tx: 900, ty: 500, t: 0, pause: 0, pose: '', sz: 0, n: 0, on: false, l: 0,
-    u: 0, dir: 1, dash: 0, busy: 0, edge: 0,
+    dash: 0, busy: 0, edge: 0, fling: 0,
   };
   private sessionPose = 'grin';
+  /** active press on the robot: start point, grab offset, recent samples (stage px) */
+  private press: { id: number; sx: number; sy: number; ox: number; oy: number; drag: boolean; h: Pt[] } | null = null;
 
   attach(rob: HTMLDivElement, rbi: HTMLDivElement, rbb: HTMLDivElement, stage: HTMLElement) {
     this.rob = rob;
     this.rbi = rbi;
     this.rbb = rbb;
     this.stage = stage;
-    rbi.addEventListener('pointerdown', this.onTap);
+    rbi.addEventListener('pointerdown', this.onDown);
+    rbi.addEventListener('pointermove', this.onMove);
+    rbi.addEventListener('pointerup', this.onUp);
+    rbi.addEventListener('pointercancel', this.onUp);
     this.raf = requestAnimationFrame(this.fl);
   }
 
   detach() {
     cancelAnimationFrame(this.raf);
-    this.rbi?.removeEventListener('pointerdown', this.onTap);
+    this.rbi?.removeEventListener('pointerdown', this.onDown);
+    this.rbi?.removeEventListener('pointermove', this.onMove);
+    this.rbi?.removeEventListener('pointerup', this.onUp);
+    this.rbi?.removeEventListener('pointercancel', this.onUp);
+    this.press = null;
     this.rob = this.rbi = this.rbb = this.stage = null;
   }
 
@@ -85,21 +119,23 @@ class FloatingRobot {
   /** prototype syncRob(): called whenever the screen or the session phase changes */
   sync(screen: BoothScreen, sessionPose?: string) {
     const F = this.F;
+    const previous = this.screen;
     this.screen = screen;
     if (sessionPose) this.sessionPose = sessionPose;
     F.on = FLY.includes(screen);
     if (!this.rob) return;
     this.rob.style.display = F.on ? 'block' : 'none';
     if (!F.on) return;
-    const sz = screen == 'ready' || screen == 'session' ? 300 : 220;
+    if (screen === 'pay' && previous !== 'pay') this.say('Pilih paketmu!', 3200);
+    const sz = screen == 'ready' || screen == 'session' ? 200 : 220;
     this.setPose(screen == 'ready' ? 'wave' : screen == 'session' ? this.sessionPose : F.pose && F.pose != 'cam' ? F.pose : 'grin', sz);
     const eg = screen == 'session' || screen == 'ready';
     if (eg && !F.edge) {
       F.edge = 1;
-      if (F.x > 300 && F.x < 1300 && F.y > 150 && F.y < 700) {
-        F.x = -380;
-        F.vx = 1200;
-        F.y = 300;
+      if (F.x < 1300) {
+        F.x = 2100;
+        F.vx = -1200;
+        F.y = 200;
       }
       F.t = 0;
     }
@@ -158,6 +194,8 @@ class FloatingRobot {
       return;
     }
     F.busy = 1;
+    F.fling = 0;
+    this.press = null;
     this.setPose(pose, F.sz);
     this.rbi.className = '';
     F.pause = 0;
@@ -185,6 +223,8 @@ class FloatingRobot {
       return;
     }
     F.busy = 1;
+    F.fling = 0;
+    this.press = null;
     F.pause = 0;
     F.dash = 1;
     setTimeout(() => {
@@ -196,7 +236,7 @@ class FloatingRobot {
 
   // -------------------------------------------------------------- taps
 
-  private onTap = (ev: PointerEvent) => {
+  private onDown = (ev: PointerEvent) => {
     // Never block the customer: forward taps that land over a control.
     const under = this.elementUnder(ev.clientX, ev.clientY);
     const target = under?.closest(INTERACTIVE) as HTMLElement | null;
@@ -208,9 +248,64 @@ class FloatingRobot {
       } else target.click();
       return;
     }
-    const r = RESP[this.F.n++ % RESP.length];
-    this.react(r.pose, r.an, r.t(), r.fx, 1.9);
+    if (this.press || this.F.busy || !this.rbi) return;
+    const [x, y] = this.toStage(ev);
+    this.rbi.setPointerCapture(ev.pointerId);
+    this.press = { id: ev.pointerId, sx: x, sy: y, ox: x - this.F.x, oy: y - this.F.y, drag: false, h: [{ x, y, t: ev.timeStamp }] };
   };
+
+  private onMove = (ev: PointerEvent) => {
+    const p = this.press;
+    const F = this.F;
+    if (!p || ev.pointerId !== p.id) return;
+    if (F.busy) {
+      this.press = null;
+      return;
+    }
+    const [x, y] = this.toStage(ev);
+    if (!p.drag) {
+      if (Math.hypot(x - p.sx, y - p.sy) < DRAG_PX) return;
+      p.drag = true;
+      clearTimeout(this.to);
+      if (this.rbi) this.rbi.className = '';
+      F.fling = 0;
+      F.pause = 0;
+      this.setPose('shock', F.sz);
+      this.say('Wuih, dibawa ke mana nih?', 2400);
+    }
+    p.h.push({ x, y, t: ev.timeStamp });
+    if (p.h.length > 12) p.h.shift();
+    F.x = x - p.ox;
+    F.y = y - p.oy;
+    F.vx = flingVelocity(p.h)[0];
+  };
+
+  private onUp = (ev: PointerEvent) => {
+    const p = this.press;
+    const F = this.F;
+    if (!p || ev.pointerId !== p.id) return;
+    this.press = null;
+    if (p.drag) {
+      [F.vx, F.vy] = flingVelocity(p.h);
+      F.fling = 1;
+      F.pause = 0;
+      return;
+    }
+    if (ev.type === 'pointercancel' || F.busy) return;
+    const i = F.n++ % RESP.length;
+    const r = RESP[i];
+    this.react(r.pose, r.an, r.t(), r.fx, 1.9);
+    // A tap must not cut the countdown or pose tips: wait behind them there.
+    voice(`tap_${i + 1}`, this.screen === 'ready' || this.screen === 'session');
+  };
+
+  /** client px → 1920×1080 stage px */
+  private toStage(ev: PointerEvent): [number, number] {
+    if (!this.stage) return [ev.clientX, ev.clientY];
+    const sr = this.stage.getBoundingClientRect();
+    const k = sr.width / 1920 || 1;
+    return [(ev.clientX - sr.left) / k, (ev.clientY - sr.top) / k];
+  }
 
   private elementUnder(x: number, y: number): HTMLElement | null {
     if (!this.rob) return null;
@@ -223,17 +318,15 @@ class FloatingRobot {
 
   // -------------------------------------------------------------- movement
 
-  private per(u: number): [number, number] {
+  /** Capture screens: park centred in the studio column's [data-dock] box, clear of camera and countdown. */
+  private dock(): [number, number] {
     const F = this.F;
-    const X0 = 8, X1 = 1920 - F.sz - 8, Y0 = 70, Y1 = 1080 - F.sz - 30, W = X1 - X0, H = Y1 - Y0;
-    let d = u * 2 * (W + H);
-    if (d < W) return [X0 + d, Y0];
-    d -= W;
-    if (d < H) return [X1, Y0 + d];
-    d -= H;
-    if (d < W) return [X1 - d, Y1];
-    d -= W;
-    return [X0, Y1 - d];
+    const el = this.stage?.querySelector<HTMLElement>('[data-dock]');
+    if (!el || !this.stage) return [1920 - F.sz - 40, 160];
+    const sr = this.stage.getBoundingClientRect();
+    const k = sr.width / 1920 || 1;
+    const r = el.getBoundingClientRect();
+    return [(r.left - sr.left) / k + (r.width / k - F.sz) / 2, (r.top - sr.top) / k + (r.height / k - F.sz * 1.05) / 2];
   }
 
   /** Stage-space rectangles the robot should not park on (safe zones). */
@@ -282,6 +375,21 @@ class FloatingRobot {
     F.l = ts;
     if (F.dash == 1) {
       F.x += 2600 * dt;
+    } else if (this.press?.drag) {
+      F.vx *= 0.85; // finger owns the position (onMove); just let the tilt settle when it holds still
+    } else if (F.fling) {
+      const f = Math.exp(-1.6 * dt);
+      F.vx *= f;
+      F.vy *= f;
+      [F.x, F.vx] = bounce(F.x + F.vx * dt, F.vx, 1920 - F.sz);
+      [F.y, F.vy] = bounce(F.y + F.vy * dt, F.vy, 1080 - F.sz * 1.05);
+      if (Math.hypot(F.vx, F.vy) < 30) {
+        F.fling = 0;
+        F.vx = F.vy = 0;
+        F.pause = 1;
+        F.t = 0;
+        this.sync(this.screen); // restore the screen's pose (ready wave / session pose)
+      }
     } else {
       if (F.pause > 0) {
         F.pause -= dt;
@@ -292,9 +400,8 @@ class FloatingRobot {
         if (F.t <= 0) {
           F.t = 2.4 + Math.random() * 2.2;
           if (this.screen == 'session' || this.screen == 'ready') {
-            F.u = (F.u + F.dir * (0.05 + Math.random() * 0.08) + 1) % 1;
-            if (Math.random() < 0.2) F.dir *= -1;
-            const q = this.per(F.u);
+            F.t = 0.5;
+            const q = this.dock();
             F.tx = q[0];
             F.ty = q[1];
           } else {

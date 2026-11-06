@@ -1,6 +1,7 @@
 import { memo, type PointerEvent as RPointerEvent, type WheelEvent as RWheelEvent } from 'react';
 import { computeFrameLayout, cssTransform, filterById, frameRadius, type EditParams, type PhotoDTO, type PhotoTemplate } from '@photobooth/shared';
 import { Pic } from './basics';
+import { stickerArt, type Sticker } from '../stickers';
 
 /**
  * prototype frame(t, h, mode) — data driven. Geometry comes from the shared
@@ -23,9 +24,14 @@ export interface FrameProps {
   hiRes?: boolean;
   onSlotPointerDown?: (e: RPointerEvent<HTMLDivElement>, i: number) => void;
   onSlotWheel?: (e: RWheelEvent<HTMLDivElement>, i: number) => void;
+  stickers?: Sticker[];
+  activeSticker?: number | null;
+  onStickerPointerDown?: (e: RPointerEvent<HTMLDivElement>, id: number) => void;
+  onStickerWheel?: (e: RWheelEvent<HTMLDivElement>, id: number) => void;
+  onStickerRemove?: (id: number) => void;
 }
 
-export const Frame = memo(function Frame({ t, h, mode, slots, edits, activeSlot, cycle, label, hiRes, onSlotPointerDown, onSlotWheel }: FrameProps) {
+export const Frame = memo(function Frame({ t, h, mode, slots, edits, activeSlot, cycle, label, hiRes, onSlotPointerDown, onSlotWheel, stickers, activeSticker, onStickerPointerDown, onStickerWheel, onStickerRemove }: FrameProps) {
   const L = computeFrameLayout(t, h);
   const live = mode === 1;
   const transformed = live || mode >= 2;
@@ -35,7 +41,7 @@ export const Frame = memo(function Frame({ t, h, mode, slots, edits, activeSlot,
     <div
       className="fr"
       data-avoid={live ? '' : undefined}
-      style={{ width: L.width, height: L.height, background: t.background, padding: 0, display: 'block', borderRadius: frameRadius(h), flex: 'none' }}
+      style={{ width: L.width, height: L.height, background: t.background, padding: 0, display: 'block', borderRadius: frameRadius(h), flex: 'none', overflow: stickers?.length ? 'hidden' : undefined }}
     >
       {L.slots.map((r, i) => {
         const p = slots[i];
@@ -116,6 +122,35 @@ export const Frame = memo(function Frame({ t, h, mode, slots, edits, activeSlot,
       >
         {label}
       </div>
+      {stickers?.map((st) => {
+        const art = stickerArt(st.k);
+        if (!art) return null;
+        const w = st.s * L.width;
+        const on = live && activeSticker === st.id;
+        return (
+          <div
+            key={st.id}
+            className="stk"
+            data-testid={live ? `sticker-${st.id}` : undefined}
+            style={{ position: 'absolute', left: st.x * L.width - w / 2, top: st.y * L.height - (w * art.ratio) / 2, width: w, height: w * art.ratio, touchAction: 'none', pointerEvents: live ? 'auto' : 'none', outline: on ? '4px dashed var(--ye)' : undefined, outlineOffset: 4 }}
+            onPointerDown={live && onStickerPointerDown ? (ev) => onStickerPointerDown(ev, st.id) : undefined}
+            onWheel={live && onStickerWheel ? (ev) => onStickerWheel(ev, st.id) : undefined}
+          >
+            <img src={art.url} alt="" draggable={false} style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }} />
+            {on && onStickerRemove ? (
+              <button
+                className="stk-x"
+                aria-label="Hapus stiker"
+                data-testid="sticker-remove"
+                onPointerDown={(ev) => ev.stopPropagation()}
+                onClick={() => onStickerRemove(st.id)}
+              >
+                ×
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 });

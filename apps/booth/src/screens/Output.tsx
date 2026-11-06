@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { rp } from '@photobooth/shared';
 import { currentTemplate, useBooth, useFlatPhotos } from '../store';
 import { Frame } from '../components/Frame';
-import { Bubble, Icon, Pic, QrCode, Robot } from '../components/basics';
+import { Bubble, HaloRobot, Icon, Pic, QrCode, Steps } from '../components/basics';
 import { back, confirmPrint, finish, resetToWelcome } from '../flow';
 
 function useFrameSlots() {
@@ -22,6 +22,7 @@ export function Final() {
   const flat = useFlatPhotos();
   const session = useBooth((s) => s.session)!;
   const edits = useBooth((s) => s.edits);
+  const stickers = useBooth((s) => s.stickers);
   const label = useBooth((s) => s.config!.branding.label);
   const busy = useBooth((s) => s.busy);
   const slots = useFrameSlots();
@@ -39,41 +40,48 @@ export function Final() {
     );
   };
   return (
-    <div className="scr en">
+    <div className="scr en booth-theme">
       <div className="wall">{[0, 1, 2, 3, 4, 5].map(col)}</div>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(250,248,243,.86)', backdropFilter: 'blur(8px)' }} />
-      <div className="top" style={{ position: 'relative', zIndex: 2 }}>
+      <div className="top" style={{ position: 'relative', zIndex: 2, marginBottom: 0 }}>
         <button className={`btn sm ${busy === 'back' ? 'wait' : ''}`} onClick={back}>
           <Icon n="back" z={30} />
           Kembali
         </button>
-        <div className="chip b">Cek terakhir</div>
+        <Steps cur={3} />
       </div>
-      <div className="row" style={{ alignItems: 'center', justifyContent: 'center', gap: 80, position: 'relative', zIndex: 2 }}>
+      <div className="row" style={{ alignItems: 'center', justifyContent: 'center', gap: 96, position: 'relative', zIndex: 2, paddingBottom: 30 }}>
         <div className="float" style={{ animationDuration: '8s' }}>
-          <Frame t={t} h={780} mode={2} slots={slots} edits={Object.keys(edits).length ? edits : serverEdits} label={t.label || label} hiRes />
+          <Frame t={t} h={760} mode={2} slots={slots} edits={Object.keys(edits).length ? edits : serverEdits} label={t.label || label} hiRes stickers={stickers} />
         </div>
-        <div className="card" style={{ width: 680, padding: 52, display: 'flex', flexDirection: 'column', gap: 30 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 42, fontWeight: 600 }}>
+        <div className="card final-card" style={{ width: 700, padding: '44px 52px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+          <div>
+            <span className="free-eyebrow"><span>✦</span> CEK TERAKHIR <span>✦</span></span>
+            <h1 style={{ margin: '10px 0 0', fontSize: 68 }}>Sudah <em>cantik?</em></h1>
+          </div>
+          <div className="final-row">
+            <span className="free-perk-icon digital"><Icon n="crop" z={32} /></span>
             <span>Frame</span>
-            <span>{t.name}</span>
+            <b>{t.name}</b>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 42, fontWeight: 600 }}>
-            <span>Jumlah cetak</span>
-            <span>{session.quantity}×</span>
+          <div className="final-row">
+            <span className="free-perk-icon print"><Icon n={session.quantity ? 'print' : 'qr'} z={32} /></span>
+            <span>{session.quantity ? 'Jumlah cetak' : 'Paket'}</span>
+            <b>{session.quantity ? `${session.quantity}×` : 'Digital saja'}</b>
           </div>
-          <p className="p" style={{ fontSize: 30 }}>
-            Foto digital dikirim lewat QR setelah cetak selesai.
+          <p className="p" style={{ fontSize: 26, margin: 0 }}>
+            {session.quantity ? 'Foto digital dikirim lewat QR setelah cetak selesai.' : 'Foto digital dikirim lewat QR, tanpa cetak.'}
           </p>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span className="p">Sudah dibayar</span>
-            <span style={{ fontSize: 60, fontWeight: 700, color: 'var(--bl)' }}>{rp(session.amount)}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 16, borderTop: '1px solid rgba(105,81,133,.12)' }}>
+            <span className="p" style={{ fontSize: 26 }}>Sudah dibayar</span>
+            <span style={{ fontSize: 60, fontWeight: 700, color: '#e94f8b' }}>{rp(session.amount)}</span>
           </div>
           <button className={`btn pr ${busy === 'confirm' ? 'wait' : ''}`} style={{ height: 130, fontSize: 46, padding: '0 28px' }} onClick={confirmPrint} data-testid="final-print">
-            <Icon n="print" z={56} /> CETAK & SIMPAN
+            {session.quantity ? <><Icon n="print" z={56} /> CETAK & SIMPAN</> : <><Icon n="download" z={56} /> SIMPAN</>}
           </button>
         </div>
       </div>
+      <footer className="free-footer" style={{ zIndex: 2 }}><span>ROBOT PHOTOBOOTH</span><i /> {t.name}</footer>
     </div>
   );
 }
@@ -96,27 +104,31 @@ export function Print() {
 
   if (failed) {
     return (
-      <div className="scr en" style={{ alignItems: 'center', justifyContent: 'center', gap: 34, textAlign: 'center' }} data-testid="print-failed">
-        <Robot m="think" s={320} />
-        <h2>Cetakan tertunda</h2>
+      <div className="scr en booth-theme booth-center" style={{ alignItems: 'center', justifyContent: 'center', gap: 34, textAlign: 'center' }} data-testid="print-failed">
+        <HaloRobot m="think" s={300} />
+        <span className="free-eyebrow"><span>✦</span> TENANG, FOTOMU AMAN <span>✦</span></span>
+        <h2>Cetakan <em>tertunda</em></h2>
         <div style={{ width: 1100 }}>
           <Bubble small="Tenang, fotomu aman. Petugas akan mencetak ulang untukmu. Foto digital tetap bisa diambil lewat QR.">
             {job?.userMessage ?? 'Printer sedang bermasalah.'}
           </Bubble>
         </div>
+        <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> CETAK</footer>
       </div>
     );
   }
   return (
-    <div className="scr en" style={{ alignItems: 'center', justifyContent: 'center', gap: 34, textAlign: 'center' }}>
-      <Robot m="cam" s={320} />
-      <h2>Fotomu sedang dicetak</h2>
+    <div className="scr en booth-theme booth-center" style={{ alignItems: 'center', justifyContent: 'center', gap: 34, textAlign: 'center' }}>
+      <HaloRobot m="cam" s={300} />
+      <span className="free-eyebrow"><span>✦</span> HAMPIR SELESAI <span>✦</span></span>
+      <h2>{session.quantity ? <>Fotomu sedang <em>dicetak</em></> : <>Fotomu sedang <em>disiapkan</em></>}</h2>
       <p className="p" id="pt" data-testid="print-progress">
-        Mencetak… {shown}%
+        {session.quantity ? 'Mencetak…' : 'Menyimpan…'} {shown}%
       </p>
       <div className="bar" style={{ width: 900 }}>
         <i id="pb" style={{ width: `${shown}%` }} />
       </div>
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> {session.quantity ? 'CETAK' : 'SIMPAN'}</footer>
     </div>
   );
 }
@@ -130,23 +142,25 @@ export function Qr() {
   const busy = useBooth((s) => s.busy);
   const slots = useFrameSlots();
   const edits = Object.fromEntries(session.slots.map((x) => [x.slotIndex, x.edit]));
+  const stickers = useBooth((s) => s.stickers);
   const url = session.gallery?.url ?? '';
   const preview = session.gallery?.preview;
   const [previewFailed, setPreviewFailed] = useState(false);
   const printProblem = session.print?.status === 'FAILED' || session.print?.status === 'RETRYING';
   return (
-    <div className="scr en">
+    <div className="scr en booth-theme" style={{ paddingBottom: 56 }}>
       <div className="row" style={{ alignItems: 'center', justifyContent: 'center', gap: 96 }}>
         <div className="float" style={{ animationDuration: '8s' }}>
           {preview && !previewFailed ? (
             <img src={preview} alt="Hasil fotomu" draggable={false} onError={() => setPreviewFailed(true)} style={{ height: 780, display: 'block', borderRadius: 24, boxShadow: 'var(--sh)' }} />
           ) : (
-            <Frame t={t} h={780} mode={4} slots={slots} edits={edits} cycle={flat} label={t.label || label} hiRes />
+            <Frame t={t} h={780} mode={4} slots={slots} edits={edits} cycle={flat} label={t.label || label} hiRes stickers={stickers} />
           )}
         </div>
         <div style={{ flex: 1, maxWidth: 1000, display: 'flex', flexDirection: 'column', gap: 30 }}>
           <div>
-            <h2>Foto digitalmu sudah siap</h2>
+            <span className="free-eyebrow"><span>✦</span> TINGGAL SCAN <span>✦</span></span>
+            <h2 style={{ marginTop: 10 }}>Foto digitalmu sudah <em>siap</em></h2>
             <p className="p" style={{ marginTop: 12 }}>
               Scan QR untuk melihat atau mengunduh fotomu.
             </p>
@@ -156,17 +170,18 @@ export function Qr() {
               {url ? <QrCode text={url} size={400} level="M" /> : <div className="qrskel" style={{ width: 400, height: 400 }} />}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 28 }}>
-              <Robot m="cheer" s={240} />
+              <HaloRobot m="cheer" s={220} />
               <button className={`btn pr ${busy === 'finish' ? 'wait' : ''}`} onClick={finish} data-testid="qr-done">
                 SELESAI <Icon n="next" z={36} />
               </button>
             </div>
           </div>
           <p className="p" style={{ fontSize: 30 }}>
-            {printProblem ? 'Cetakanmu akan dibantu petugas.' : 'Cetakanmu sedang keluar dari mesin.'} {preview && !previewFailed ? 'Versi animasinya juga ikut di link QR.' : `Semua momen dari ${session.plan.angles} angle berganti di dalam frame.`}
+            {!session.quantity ? '' : printProblem ? 'Cetakanmu akan dibantu petugas.' : 'Cetakanmu sedang keluar dari mesin.'} {preview && !previewFailed ? 'Versi animasinya juga ikut di link QR.' : `Semua momen dari ${session.plan.angles} angle berganti di dalam frame.`}
           </p>
         </div>
       </div>
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> QR</footer>
     </div>
   );
 }
@@ -174,15 +189,19 @@ export function Qr() {
 /** prototype V.thanks */
 export function Thanks() {
   return (
-    <div className="scr en" style={{ alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 26 }}>
-      <Robot m="cheer" s={320} />
-      <h1 style={{ position: 'relative', fontSize: 120 }}>Terima kasih!</h1>
+    <div className="scr en booth-theme booth-center" style={{ alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 26 }}>
+      <div className="free-spark free-spark-one" aria-hidden="true">✦</div>
+      <div className="free-spark free-spark-two" aria-hidden="true">✧</div>
+      <HaloRobot m="cheer" s={300} />
+      <span className="free-eyebrow"><span>✦</span> SAMPAI JUMPA LAGI <span>✦</span></span>
+      <h1 style={{ fontSize: 120 }}>Terima <em>kasih!</em></h1>
       <p className="p" style={{ position: 'relative', fontSize: 44 }}>
         Semoga seru bersama fotografer robotmu!
       </p>
       <button className="btn pr" style={{ position: 'relative', marginTop: 20, height: 130, fontSize: 52 }} onClick={resetToWelcome} data-testid="thanks-home">
         KEMBALI KE AWAL
       </button>
+      <footer className="free-footer"><span>ROBOT PHOTOBOOTH</span><i /> TERIMA KASIH</footer>
     </div>
   );
 }
