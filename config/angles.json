@@ -1,15 +1,15 @@
 {
   "$comment": "Jona robot poses for angles 1..N. position.joints = 6 absolute joint degrees (J0..J5) sent as JG:j0:..:j5. Angle N = preset PN. Home (0,0,0,0,0,0) is sent with HOME, not an angle. Edit from Admin → Robot (jona-bridge rewrites this file; no restart needed).",
   "angles": [
-    { "id": 1, "name": "P1", "position": { "joints": [0, -58, -68, -7, 0, 0] } },
-    { "id": 2, "name": "P2", "position": { "joints": [-66, -50, -43, 1, 0, 81] } },
-    { "id": 3, "name": "P3", "position": { "joints": [0, 36, 90, 52, 0, 0] } },
-    { "id": 4, "name": "P4", "position": { "joints": [47, -47, -45, 2, 102, -82] } },
-    { "id": 5, "name": "P5", "position": { "joints": [0, 0, 97, 103, -10, -104] } },
-    { "id": 6, "name": "P6", "position": { "joints": [60, -51, 94, 141, -2, -103] } },
-    { "id": 7, "name": "P7", "position": { "joints": [-60, -84, 4, 94, -104, 78] } },
-    { "id": 8, "name": "P8", "position": { "joints": [77, 46, 88, 35, 86, 87] } },
-    { "id": 9, "name": "P9", "position": { "joints": [0, -76, 95, 205, -13, 105] } },
-    { "id": 10, "name": "P10", "position": { "joints": [-87, 0, -81, 115, -217, -114] } }
+    { "id": 1, "name": "P1", "position": { "joints": [4, 20, 107, 89, 0, 0] } },
+    { "id": 2, "name": "P2", "position": { "joints": [4, 0, 0, -2, 0, 0] } },
+    { "id": 3, "name": "P3", "position": { "joints": [-85, 39.92, 0, -45, 0, 59.85] } },
+    { "id": 4, "name": "P4", "position": { "joints": [-85, -39.92, 0, 45, 0, -59.85] } },
+    { "id": 5, "name": "P5", "position": { "joints": [4, -25, 0, 10, 0, 0] } },
+    { "id": 6, "name": "P6", "position": { "joints": [0, -95, 70, 200, 0, 0] } },
+    { "id": 7, "name": "P7", "position": { "joints": [-85, -95, 40, 130, 30.02, 120.02] } },
+    { "id": 8, "name": "P8", "position": { "joints": [-85, 90, -20, 64.63, -214.84, -116.01] } },
+    { "id": 9, "name": "P9", "position": { "joints": [4, 30, 30, -4, 3.66, 0] } },
+    { "id": 10, "name": "P10", "position": { "joints": [4, -65, 30, 101.04, 5.67, 0] } }
   ]
 }

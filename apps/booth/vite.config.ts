@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '../..');
   const API = process.env.VITE_API_PROXY ?? env.VITE_API_PROXY ?? 'http://localhost:8080';
-  const ROBOT = process.env.VITE_ROBOT_PROXY ?? env.VITE_ROBOT_PROXY ?? 'http://localhost:5001';
+  const ROBOT = process.env.VITE_ROBOT_PROXY ?? env.VITE_ROBOT_PROXY ?? 'http://127.0.0.1:5001';
   const proxy = {
     '/api': { target: API, changeOrigin: false },
     '/storage': { target: API, changeOrigin: false },

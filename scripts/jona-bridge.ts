@@ -25,6 +25,8 @@ import {
 
 const env = process.env;
 const PORT = Number(env.BRIDGE_PORT ?? 5001);
+/** Loopback only: /robot/* has no login, and every caller (Go, booth and admin proxies) runs on this PC. */
+const HOST = env.BRIDGE_HOST ?? '127.0.0.1';
 const BACKEND = (env.BACKEND_URL ?? 'http://localhost:8080').replace(/\/$/, '');
 const LEAD_SEC = Number(env.SEQUENCE_CAPTURE_LEAD_SEC ?? 3); // must equal presetCaptureDelay in Go
 const START_DELAY = Number(env.SEQUENCE_START_DELAY_SEC ?? 1);
@@ -544,8 +546,8 @@ http
       send(code, { success: false, error: (e as Error).message });
     }
   })
-  .listen(PORT, () => {
-    console.log(`jona-bridge on :${PORT} (${env.JONA_MOCK ? 'MOCK' : SERIAL}) → Go ${BACKEND}`);
+  .listen(PORT, HOST, () => {
+    console.log(`jona-bridge on ${HOST}:${PORT} (${env.JONA_MOCK ? 'MOCK' : SERIAL}) → Go ${BACKEND}`);
     // Admin's robot tuning lives in Go; take it now so the first session uses it.
     fetch(`${BACKEND}/api/robot-settings`, { signal: AbortSignal.timeout(3000) })
       .then((r) => (r.ok ? r.json() : null))
